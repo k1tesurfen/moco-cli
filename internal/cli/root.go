@@ -32,14 +32,16 @@ func Execute() int {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// The full TUI comes in a later phase.
-			return cmd.Help()
+			if !isTTY() {
+				return cmd.Help()
+			}
+			return runUI(cmd)
 		},
 	}
 	root.PersistentFlags().BoolVar(&flags.json, "json", false, "machine-readable output")
 	root.AddCommand(loginCmd(), logoutCmd(), statusCmd(), projectsCmd(),
 		startCmd(), breakCmd(), stopCmd(), presenceCmd(),
-		logCmd(), listCmd(), editCmd(), deleteCmd(), aliasCmd(), timerCmd(), queueCmd(), pauseCmd(), daemonCmd(), notifierCmd())
+		logCmd(), listCmd(), editCmd(), deleteCmd(), aliasCmd(), timerCmd(), queueCmd(), pauseCmd(), daemonCmd(), notifierCmd(), uiCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)

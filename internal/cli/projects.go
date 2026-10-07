@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
@@ -35,7 +34,7 @@ func projectsCmd() *cobra.Command {
 				fmt.Println("No matching projects.")
 				return nil
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := newTable(os.Stdout)
 			for _, p := range projects {
 				fmt.Fprintf(w, "%s\t%s\t%s\n", p.Identifier, p.Name, p.Customer.Name)
 				if withTasks {

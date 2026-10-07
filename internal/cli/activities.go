@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -163,27 +162,11 @@ func missing(a wizard.Activity) []string {
 }
 
 func wizardEnv(svc *service.Service, projects []api.Project) (wizard.Env, error) {
-	recent, err := svc.RecentPicks(projects, 5)
-	if err != nil {
-		return wizard.Env{}, err
+	env, warnings, err := wizard.NewEnv(svc, projects)
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, "Warning:", w)
 	}
-	aliases := map[string]service.Pick{}
-	for name, al := range svc.Cfg.Aliases {
-		p, t, err := service.ResolveAlias(projects, name, al)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Warning:", err)
-			continue
-		}
-		aliases[name] = service.Pick{Project: p, Task: t}
-	}
-	return wizard.Env{
-		Projects:        projects,
-		Recent:          recent,
-		Aliases:         aliases,
-		LastTask:        svc.LastTask,
-		Round:           svc.Round,
-		RoundingMinutes: svc.Cfg.RoundingMinutes,
-	}, nil
+	return env, err
 }
 
 // printBalance prints present vs. logged for a day.
@@ -246,11 +229,11 @@ func listCmd() *cobra.Command {
 				return nil
 			}
 			multiDay := timeutil.Date(start) != timeutil.Date(end)
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := newTable(os.Stdout)
 			if multiDay {
-				fmt.Fprintln(w, "ID\tDATE\tTIME\tPROJECT\tTASK\tDESCRIPTION")
+				fmt.Fprintln(w, outHead.Render("ID\tDATE\tTIME\tPROJECT\tTASK\tDESCRIPTION"))
 			} else {
-				fmt.Fprintln(w, "ID\tTIME\tPROJECT\tTASK\tDESCRIPTION")
+				fmt.Fprintln(w, outHead.Render("ID\tTIME\tPROJECT\tTASK\tDESCRIPTION"))
 			}
 			total := 0
 			perDay := map[string]int{}
@@ -259,9 +242,11 @@ func listCmd() *cobra.Command {
 				total += sec
 				perDay[a.Date] += sec
 				if multiDay {
-					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", a.ID, a.Date, timeutil.FormatSeconds(sec), oneLine(a.Project.Name, 30), a.Task.Name, desc)
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", outMuted.Render(fmt.Sprint(a.ID)), a.Date, timeutil.FormatSeconds(sec),
+						outProject.Render(oneLine(a.Project.Name, 30)), outProject.Render(a.Task.Name), desc)
 				} else {
-					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", a.ID, timeutil.FormatSeconds(sec), oneLine(a.Project.Name, 30), a.Task.Name, desc)
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", outMuted.Render(fmt.Sprint(a.ID)), timeutil.FormatSeconds(sec),
+						outProject.Render(oneLine(a.Project.Name, 30)), outProject.Render(a.Task.Name), desc)
 				}
 			}
 			w.Flush()
@@ -277,7 +262,7 @@ func listCmd() *cobra.Command {
 					fmt.Printf("%s  %s\n", t.Format("Mon 2 Jan"), timeutil.FormatSeconds(perDay[k]))
 				}
 			}
-			fmt.Printf("Total %s\n", timeutil.FormatSeconds(total))
+			fmt.Println(outTitle.Render("Total " + timeutil.FormatSeconds(total)))
 			return nil
 		},
 	}
@@ -395,39 +380,7 @@ func editWizard(ctx context.Context, svc *service.Service, projects []api.Projec
 	if err != nil {
 		return service.ActivityChange{}, err
 	}
-	env.AskAll = true
-	env.Title = "Save changes?"
-	d, _ := time.ParseInLocation(timeutil.DateLayout, cur.Date, time.Local)
-	a := wizard.Activity{Date: d, Seconds: cur.Seconds, Description: cur.Description}
-	for _, p := range projects {
-		if p.ID == cur.Project.ID {
-			p := p
-			a.Project = &p
-			for _, t := range p.Tasks {
-				if t.ID == cur.Task.ID {
-					t := t
-					a.Task = &t
-				}
-			}
-		}
-	}
-	if err := wizard.Run(ctx, &a, env); err != nil {
-		return service.ActivityChange{}, err
-	}
-	var ch service.ActivityChange
-	if a.Project.ID != cur.Project.ID {
-		ch.Project = a.Project
-	}
-	if a.Task.ID != cur.Task.ID || ch.Project != nil {
-		ch.Task = a.Task
-	}
-	if a.Seconds != cur.Seconds {
-		ch.Seconds = &a.Seconds
-	}
-	if a.Description != cur.Description {
-		ch.Description = &a.Description
-	}
-	return ch, nil
+	return wizard.Edit(ctx, cur, env)
 }
 
 func deleteCmd() *cobra.Command {

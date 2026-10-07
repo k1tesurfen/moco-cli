@@ -7,7 +7,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -194,8 +193,8 @@ func presenceListCmd() *cobra.Command {
 				fmt.Println("No presences.")
 				return nil
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tDATE\tFROM\tTO\tDURATION\tLOCATION")
+			w := newTable(os.Stdout)
+			fmt.Fprintln(w, outHead.Render("ID\tDATE\tFROM\tTO\tDURATION\tLOCATION"))
 			for _, p := range ps {
 				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", p.ID, p.Date, p.From, orDots(p.To), presenceDuration(p, svc.Now()), where(p.IsHomeOffice))
 			}

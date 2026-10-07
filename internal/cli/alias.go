@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
@@ -115,7 +114,7 @@ func aliasListCmd() *cobra.Command {
 				names = append(names, n)
 			}
 			sort.Strings(names)
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := newTable(os.Stdout)
 			for _, n := range names {
 				a := cfg.Aliases[n]
 				status := ""

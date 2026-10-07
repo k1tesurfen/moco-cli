@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/k1tesurfen/moco-cli/internal/api"
@@ -241,4 +242,107 @@ func (s *Service) EditPresence(ctx context.Context, id int64, from, to string, h
 		return api.Presence{}, fmt.Errorf("nothing to change — pass --from, --to, --home or --office")
 	}
 	return s.API.UpdatePresence(ctx, id, in)
+}
+
+// AddPresence creates a presence from–to ("HH:MM") on date; an empty to opens it (like Start).
+// If MOCO is not reachable, the presence is queued and a *QueuedError is returned.
+func (s *Service) AddPresence(ctx context.Context, date time.Time, from, to string) (api.Presence, error) {
+	if strings.TrimSpace(to) == "" {
+		return s.Start(ctx, date, from, nil)
+	}
+	from, err := timeutil.NormalizeClock(from)
+	if err != nil {
+		return api.Presence{}, err
+	}
+	if to, err = timeutil.NormalizeClock(to); err != nil {
+		return api.Presence{}, err
+	}
+	if to <= from {
+		return api.Presence{}, fmt.Errorf("end %s is not after the start %s", to, from)
+	}
+	p, err := s.addPresence(ctx, date, from, to)
+	if api.IsUnreachable(err) {
+		return p, s.enqueue(store.QueueItem{Kind: store.KindPresence, Date: timeutil.Date(date), From: from, To: to}, err)
+	}
+	return p, err
+}
+
+func (s *Service) addPresence(ctx context.Context, date time.Time, from, to string) (api.Presence, error) {
+	ps, err := s.dayPresences(ctx, date)
+	if err != nil {
+		return api.Presence{}, err
+	}
+	in := api.Presence{From: from, To: to}
+	for _, p := range ps {
+		if overlap(in, p) {
+			return api.Presence{}, fmt.Errorf("%s–%s overlaps the presence %s", from, to, span(p))
+		}
+	}
+	var home *bool
+	if len(ps) == 0 {
+		h := s.Cfg.HomeOfficeOn(date)
+		home = &h
+	}
+	return s.API.CreatePresence(ctx, api.PresenceInput{Date: timeutil.Date(date), From: from, To: to, IsHomeOffice: home})
+}
+
+// overlap treats an open presence as running until the end of the day, like MOCO.
+func overlap(a, b api.Presence) bool {
+	end := func(p api.Presence) string {
+		if p.To == "" {
+			return "24:00"
+		}
+		return p.To
+	}
+	return a.From < end(b) && b.From < end(a)
+}
+
+// DeletePresence deletes a presence.
+func (s *Service) DeletePresence(ctx context.Context, id int64) error {
+	return s.API.DeletePresence(ctx, id)
+}
+
+// MergePresences removes the break after the presence id: the presence is deleted and the next
+// presence of the day is extended back to its start. (MOCO can't reopen a presence by PATCH, so
+// the later one is kept: it may be open.) Returns the merged presence.
+func (s *Service) MergePresences(ctx context.Context, date time.Time, id int64) (api.Presence, error) {
+	ps, err := s.dayPresences(ctx, date)
+	if err != nil {
+		return api.Presence{}, err
+	}
+	i := -1
+	for j := range ps {
+		if ps[j].ID == id {
+			i = j
+		}
+	}
+	switch {
+	case i < 0:
+		return api.Presence{}, fmt.Errorf("presence %d not found on %s", id, timeutil.Date(date))
+	case i == len(ps)-1:
+		return api.Presence{}, fmt.Errorf("%s is the last presence of the day — nothing to merge it with", span(ps[i]))
+	}
+	first, next := ps[i], ps[i+1]
+	if err := s.API.DeletePresence(ctx, first.ID); err != nil {
+		return api.Presence{}, err
+	}
+	merged, err := s.API.UpdatePresence(ctx, next.ID, api.PresenceInput{From: first.From})
+	if err != nil {
+		return api.Presence{}, fmt.Errorf("deleted %s, but could not extend %s to start at %s — add %s again: %w",
+			span(first), span(next), first.From, span(first), err)
+	}
+	return merged, nil
+}
+
+// SetDayLocation sets home office or office for all presences of date (a per-day setting in MOCO).
+func (s *Service) SetDayLocation(ctx context.Context, date time.Time, home bool) error {
+	ps, err := s.dayPresences(ctx, date)
+	if err != nil {
+		return err
+	}
+	if len(ps) == 0 {
+		return fmt.Errorf("no presence on %s — the location is stored with the presences", timeutil.Date(date))
+	}
+	_, err = s.API.UpdatePresence(ctx, ps[0].ID, api.PresenceInput{IsHomeOffice: &home})
+	return err
 }

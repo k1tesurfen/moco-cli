@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"text/tabwriter"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
@@ -140,8 +139,8 @@ func queueList() error {
 		fmt.Println("Queue is empty.")
 		return nil
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "#\tQUEUED\tSTATE\tENTRY")
+	w := newTable(os.Stdout)
+	fmt.Fprintln(w, outHead.Render("#\tQUEUED\tSTATE\tENTRY"))
 	for _, it := range items.Queue {
 		state := "pending"
 		if it.Failed {

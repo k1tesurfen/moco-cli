@@ -5,7 +5,7 @@ with a personal API token. The daemon nudges via native macOS notifications; sim
 questions are answered directly in the notification, everything else is done by the user in
 their own terminal (the tool never opens terminal windows).
 
-Status: **approved** — Phases 0–7 committed
+Status: **approved** — Phases 0–8 committed
 
 ---
 
@@ -119,7 +119,7 @@ No reaction to a notification counts as "not answered"; it is never treated as y
 ## 4. CLI commands
 
 ```
-moco                         # opens the full TUI (same as `moco ui`)
+moco                         # opens the full TUI (same as `moco ui`); help when not a terminal
 moco login                   # subdomain + token → verify via /session → Keychain
 moco logout
 moco status                  # today: presences, logged vs present, gap, running timer, queue size
@@ -409,4 +409,34 @@ after the OpenAPI spec. No automated tests ever write to the real MOCO account.
 - Verified live: LaunchAgent installed and running, notifier connected, dry-run start/end tests
   answered by the user (option, click) with result notifications. Daemon left running.
 
-Next: Phase 8 (TUI).
+**2026-10-08 — Phase 8 (TUI)**
+- `moco` (in a terminal) and `moco ui` open the fullscreen TUI (`internal/tui`, bubbletea, alt
+  screen, 16 ANSI colours). Views: **1 Day**, **2 Week**, **3 Projects**; `?` help, `r` reload,
+  `T` timer start (wizard) / stop (asks the description).
+- **Day view:** presences + activities, present/logged/missing; `←/→` days (not into the future),
+  `a` add / `e` edit activity — the existing inline huh wizard runs via `tea.Exec` (terminal handed
+  over and taken back), the TUI then writes. Presence editing in small in-TUI prompts:
+  `n` add (empty end = open), `e` from/to, `s` stop, `b` break (configured window prefilled),
+  `m` merge with the next presence, `o` toggle home office for the whole day, `d` delete (y/n).
+- **Merge** = delete the earlier presence, then `PATCH` the later one's `from` back (MOCO can't
+  reopen a presence by `PATCH`, and the later one may be open). Verified live.
+- **Week view:** Mon–Fri (weekend only with entries), spans, present/logged, gap status
+  (missing / over / no presence / not closed / day off from `moco pause`); `enter` opens the day.
+- **Projects:** assigned projects with my hours in a period (this/last week, this/last month,
+  this year; `p`/`P`), projects with hours first, `/` filter, `enter` → tasks with hours.
+- Status bar: running timer, queue counts (red "NOT in MOCO yet"), offline marker. Writes that
+  get queued show the red "NOT SAVED IN MOCO YET" line, which later load errors never overwrite.
+  The queue is synced every 30 s while entries are pending; data reloads every 5 min.
+- New service functions: `AddPresence` (queued as `presence` when offline), `MergePresences`,
+  `DeletePresence`, `SetDayLocation`, `Days` (range in two requests), `Monday`, `SumHours`.
+  `wizard.NewEnv` / `wizard.Edit` moved out of the CLI so CLI and TUI share them.
+- Plain output (`status`, `list`, `presence list`, `queue`, …) now uses the same palette; an
+  ANSI-aware replacement for `tabwriter` keeps coloured columns aligned (plain when piped).
+- Tests: TUI model driven by key messages against the fake MOCO (prompts, break/merge, delete
+  confirm, offline queueing + sync, week, projects filter).
+- Verified live on the sandbox day 2026-10-05 (driven through the model, project "Intern"):
+  add 08:00–17:00, break 13–14, merge, location home/office, edit to 16:30, delete activity and
+  presence → sandbox empty again. **Not tested live:** the wizard via `tea.Exec` (`a`, `e` on an
+  activity, `T`) — needs a real terminal; for the user to try.
+
+Next: Phase 9 (polish: `--json` everywhere, README, shell completions).

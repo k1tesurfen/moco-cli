@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
@@ -45,47 +44,49 @@ func statusCmd() *cobra.Command {
 				})
 			}
 
-			fmt.Println(now.Format("Monday, 2 Jan 2006"))
+			fmt.Println(outTitle.Render(now.Format("Monday, 2 Jan 2006")))
 			fmt.Println()
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := newTable(os.Stdout)
 
 			if len(day.Presences) == 0 {
-				fmt.Fprintln(w, "Presence\tnone recorded — `moco start`")
+				fmt.Fprintln(w, outHead.Render("Presence")+"\t"+outMuted.Render("none recorded — `moco start`"))
 			}
 			for i, p := range day.Presences {
 				label := ""
 				if i == 0 {
-					label = "Presence"
+					label = outHead.Render("Presence")
 				}
-				fmt.Fprintf(w, "%s\t%s–%s  (%s)\n", label, p.From, orDots(p.To), where(p.IsHomeOffice))
+				fmt.Fprintf(w, "%s\t%s–%s  %s\n", label, p.From, orDots(p.To), outMuted.Render("("+where(p.IsHomeOffice)+")"))
 			}
-			fmt.Fprintf(w, "Present\t%s\n", timeutil.FormatSeconds(day.PresentSeconds))
-			fmt.Fprintf(w, "Logged\t%s\n", timeutil.FormatSeconds(day.LoggedSeconds))
+			fmt.Fprintf(w, outHead.Render("Present")+"\t%s\n", timeutil.FormatSeconds(day.PresentSeconds))
+			fmt.Fprintf(w, outHead.Render("Logged")+"\t%s\n", timeutil.FormatSeconds(day.LoggedSeconds))
 			switch gap := day.Gap(); {
 			case gap > 0:
-				fmt.Fprintf(w, "Missing\t%s\n", timeutil.FormatSeconds(gap))
+				fmt.Fprintf(w, "%s\t%s\n", outHead.Render("Missing"), outErr.Render(timeutil.FormatSeconds(gap)))
 			case gap < 0:
-				fmt.Fprintf(w, "Over\t%s logged beyond presence\n", timeutil.FormatSeconds(-gap))
+				fmt.Fprintf(w, "%s\t%s\n", outHead.Render("Over"), outWarn.Render(timeutil.FormatSeconds(-gap)+" logged beyond presence"))
+			case len(day.Presences) > 0:
+				fmt.Fprintf(w, "%s\t%s\n", outHead.Render("Missing"), outOK.Render("nothing — complete ✓"))
 			}
 			if t := day.RunningTimer; t != nil {
-				fmt.Fprintf(w, "Timer\trunning on %s / %s since %s\n",
-					t.Project.Name, t.Task.Name, t.TimerStartedAt.In(now.Location()).Format("15:04"))
+				fmt.Fprintf(w, "%s\t%s %s since %s\n", outHead.Render("Timer"), outOK.Render("⏱ running on"),
+					outProject.Render(t.Project.Name+" / "+t.Task.Name), t.TimerStartedAt.In(now.Location()).Format("15:04"))
 			}
 			w.Flush()
 			printQueueLine(pending, failed)
 
 			if len(day.Activities) > 0 {
 				fmt.Println()
-				w = tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+				w = newTable(os.Stdout)
 				for _, a := range day.Activities {
 					sec, desc := shownActivity(a, now, 60)
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", timeutil.FormatSeconds(sec), a.Project.Name, a.Task.Name, desc)
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", timeutil.FormatSeconds(sec), outProject.Render(a.Project.Name), outProject.Render(a.Task.Name), desc)
 				}
 				w.Flush()
 			}
 			if len(day.Presences) == 0 && len(day.Activities) > 0 {
 				fmt.Println()
-				fmt.Println("Note: activities logged without a presence today.")
+				fmt.Println(outWarn.Render("Note: activities logged without a presence today."))
 			}
 			return nil
 		},
