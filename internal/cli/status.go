@@ -22,12 +22,19 @@ func statusCmd() *cobra.Command {
 				return err
 			}
 			now := svc.Now()
+			st, err := svc.Store.Load()
+			if err != nil {
+				return err
+			}
+			pending, failed := st.QueueCounts()
 			day, err := svc.Day(cmd.Context(), now)
 			if err != nil {
 				return err
 			}
 			if flags.json {
 				return printJSON(map[string]any{
+					"queue_pending":   pending,
+					"queue_failed":    failed,
 					"date":            day.Date,
 					"presences":       day.Presences,
 					"activities":      day.Activities,
@@ -65,6 +72,7 @@ func statusCmd() *cobra.Command {
 					t.Project.Name, t.Task.Name, t.TimerStartedAt.In(now.Location()).Format("15:04"))
 			}
 			w.Flush()
+			printQueueLine(pending, failed)
 
 			if len(day.Activities) > 0 {
 				fmt.Println()
@@ -84,6 +92,16 @@ func statusCmd() *cobra.Command {
 			}
 			return nil
 		},
+	}
+}
+
+// printQueueLine mentions the offline queue if it is not empty.
+func printQueueLine(pending, failed int) {
+	if pending > 0 {
+		fmt.Println(alarmOut.Render(fmt.Sprintf("Queue: %d %s NOT in MOCO yet — `moco queue`", pending, plural(pending, "entry", "entries"))))
+	}
+	if failed > 0 {
+		fmt.Println(alarmOut.Render(fmt.Sprintf("Queue: %d %s rejected by MOCO — `moco queue`", failed, plural(failed, "entry", "entries"))))
 	}
 }
 

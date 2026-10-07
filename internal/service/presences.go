@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
 	"github.com/k1tesurfen/moco-cli/internal/api"
+	"github.com/k1tesurfen/moco-cli/internal/store"
 	"github.com/k1tesurfen/moco-cli/internal/timeutil"
 )
 
@@ -41,11 +43,20 @@ func span(p api.Presence) string {
 // Start opens a presence on date at from ("HH:MM"). home nil means: keep the day's location if
 // the day already has presences, otherwise use the configured default for that weekday.
 // In MOCO, home office is a per-day setting; passing home changes it for the whole day.
+// If MOCO is not reachable, the start is queued and a *QueuedError is returned.
 func (s *Service) Start(ctx context.Context, date time.Time, from string, home *bool) (api.Presence, error) {
 	from, err := timeutil.NormalizeClock(from)
 	if err != nil {
 		return api.Presence{}, err
 	}
+	p, err := s.start(ctx, date, from, home)
+	if api.IsUnreachable(err) {
+		return p, s.enqueue(store.QueueItem{Kind: store.KindStart, Date: timeutil.Date(date), From: from, Home: home}, err)
+	}
+	return p, err
+}
+
+func (s *Service) start(ctx context.Context, date time.Time, from string, home *bool) (api.Presence, error) {
 	ps, err := s.dayPresences(ctx, date)
 	if err != nil {
 		return api.Presence{}, err
@@ -66,11 +77,20 @@ func (s *Service) Start(ctx context.Context, date time.Time, from string, home *
 }
 
 // Stop closes the open presence of date at to ("HH:MM").
+// If MOCO is not reachable, the stop is queued and a *QueuedError is returned.
 func (s *Service) Stop(ctx context.Context, date time.Time, to string) (api.Presence, error) {
 	to, err := timeutil.NormalizeClock(to)
 	if err != nil {
 		return api.Presence{}, err
 	}
+	p, err := s.stop(ctx, date, to)
+	if api.IsUnreachable(err) {
+		return p, s.enqueue(store.QueueItem{Kind: store.KindStop, Date: timeutil.Date(date), To: to}, err)
+	}
+	return p, err
+}
+
+func (s *Service) stop(ctx context.Context, date time.Time, to string) (api.Presence, error) {
 	ps, err := s.dayPresences(ctx, date)
 	if err != nil {
 		return api.Presence{}, err
@@ -89,10 +109,13 @@ func (s *Service) Stop(ctx context.Context, date time.Time, to string) (api.Pres
 type BreakResult struct {
 	Before api.Presence  // the presence ending at the break start
 	After  *api.Presence // the presence starting at the break end (nil if the break ends the presence)
+
+	cover *api.Presence // the presence being split, once known
 }
 
 // Break splits the presence covering from–to ("HH:MM") into two: one ending at from and one
 // starting at to. An open presence stays open after the break.
+// If MOCO is not reachable, the break (or its second half) is queued and a *QueuedError is returned.
 func (s *Service) Break(ctx context.Context, date time.Time, from, to string) (BreakResult, error) {
 	var res BreakResult
 	from, err := timeutil.NormalizeClock(from)
@@ -105,6 +128,38 @@ func (s *Service) Break(ctx context.Context, date time.Time, from, to string) (B
 	if to <= from {
 		return res, fmt.Errorf("break end %s is not after its start %s", to, from)
 	}
+	res, err = s.breakAt(ctx, date, from, to)
+	var half *halfBreakError
+	switch {
+	case errors.As(err, &half) && api.IsUnreachable(half.Err):
+		// The presence is already shortened; only the part after the break is missing.
+		return res, s.enqueue(store.QueueItem{Kind: store.KindPresence, Date: timeutil.Date(date), From: half.From, To: half.To}, half.Err)
+	case half == nil && api.IsUnreachable(err):
+		item := store.QueueItem{Kind: store.KindBreak, Date: timeutil.Date(date), From: from, To: to}
+		if res.cover != nil {
+			item.CoverID, item.CoverTo = res.cover.ID, res.cover.To
+		}
+		return res, s.enqueue(item, err)
+	}
+	return res, err
+}
+
+// halfBreakError means a break shortened the presence but could not create the part after it.
+type halfBreakError struct {
+	Before   api.Presence // the original presence
+	From, To string       // the missing part
+	Err      error
+}
+
+func (e *halfBreakError) Error() string {
+	return fmt.Sprintf("shortened %s to end at %s, but could not create the part after the break (%s–%s): %v",
+		span(e.Before), e.From, e.From, orEllipsis(e.To), e.Err)
+}
+
+func (e *halfBreakError) Unwrap() error { return e.Err }
+
+func (s *Service) breakAt(ctx context.Context, date time.Time, from, to string) (BreakResult, error) {
+	var res BreakResult
 	ps, err := s.dayPresences(ctx, date)
 	if err != nil {
 		return res, err
@@ -126,6 +181,7 @@ func (s *Service) Break(ctx context.Context, date time.Time, from, to string) (B
 	if cover == nil {
 		return res, fmt.Errorf("no presence on %s covers %s — start the day first", timeutil.Date(date), from)
 	}
+	res.cover = cover
 	if cover.To != "" && cover.To <= to {
 		// The break reaches past the end of this presence: just shorten it.
 		res.Before, err = s.API.UpdatePresence(ctx, cover.ID, api.PresenceInput{To: from})
@@ -144,8 +200,7 @@ func (s *Service) Break(ctx context.Context, date time.Time, from, to string) (B
 	}
 	after, err := s.API.CreatePresence(ctx, api.PresenceInput{Date: cover.Date, From: to, To: cover.To})
 	if err != nil {
-		return res, fmt.Errorf("shortened %s to %s, but could not create the part after the break (%s–%s): %w",
-			span(*cover), span(res.Before), to, orEllipsis(cover.To), err)
+		return res, &halfBreakError{Before: *cover, From: to, To: cover.To, Err: err}
 	}
 	res.After = &after
 	return res, nil

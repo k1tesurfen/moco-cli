@@ -23,6 +23,10 @@ type State struct {
 	Projects *ProjectCache `json:"projects,omitempty"`
 	// Recent holds recently used project/task pairs, most recent first.
 	Recent []Recent `json:"recent,omitempty"`
+	// Queue holds writes that could not reach MOCO, oldest first.
+	Queue []QueueItem `json:"queue,omitempty"`
+	// QueueSeq is the last queue item id handed out.
+	QueueSeq int64 `json:"queue_seq,omitempty"`
 }
 
 // Recent is one recently used project/task pair.
@@ -108,6 +112,29 @@ func (s *Store) Update(fn func(*State) error) error {
 		}
 		return s.write(st)
 	})
+}
+
+// TrySyncLock takes the queue sync lock without blocking, so the CLI and the daemon never send
+// the same queued item twice. ok is false if another process is syncing; call unlock when done.
+func (s *Store) TrySyncLock() (unlock func(), ok bool, err error) {
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+		return nil, false, err
+	}
+	f, err := os.OpenFile(filepath.Join(s.dir, "sync.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("lock queue sync: %w", err)
+	}
+	return func() {
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, true, nil
 }
 
 func (s *Store) withLock(fn func() error) error {

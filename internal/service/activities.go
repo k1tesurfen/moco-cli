@@ -174,6 +174,7 @@ func (s *Service) LastTask(projectID int64) int64 {
 func (s *Service) Round(sec int) int { return timeutil.RoundUp(sec, s.Cfg.RoundingMinutes) }
 
 // LogActivity creates an activity, rounding the duration up, and remembers the pair as recent.
+// If MOCO is not reachable, the activity is queued and a *QueuedError is returned.
 func (s *Service) LogActivity(ctx context.Context, date time.Time, p api.Project, t api.Task, seconds int, description string) (api.Activity, error) {
 	description = strings.TrimSpace(description)
 	if description == "" {
@@ -186,6 +187,13 @@ func (s *Service) LogActivity(ctx context.Context, date time.Time, p api.Project
 	a, err := s.API.CreateActivity(ctx, api.ActivityInput{
 		Date: timeutil.Date(date), ProjectID: p.ID, TaskID: t.ID, Seconds: &rounded, Description: description,
 	})
+	if api.IsUnreachable(err) {
+		s.remember(p.ID, t.ID)
+		return a, s.enqueue(store.QueueItem{
+			Kind: store.KindLog, Date: timeutil.Date(date), ProjectID: p.ID, ProjectName: p.Name,
+			TaskID: t.ID, TaskName: t.Name, Seconds: rounded, Description: description,
+		}, err)
+	}
 	if err != nil {
 		return a, err
 	}

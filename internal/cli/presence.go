@@ -72,6 +72,9 @@ func startCmd() *cobra.Command {
 			return err
 		}
 		p, err := svc.Start(cmd.Context(), d, from, location())
+		if queued(err) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -99,6 +102,9 @@ func stopCmd() *cobra.Command {
 			return err
 		}
 		p, err := svc.Stop(cmd.Context(), d, to)
+		if queued(err) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -130,6 +136,9 @@ func breakCmd() *cobra.Command {
 			from, to = parts[0], parts[1]
 		}
 		res, err := svc.Break(cmd.Context(), d, from, to)
+		if queued(err) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}

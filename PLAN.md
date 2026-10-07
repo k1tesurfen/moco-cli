@@ -5,7 +5,7 @@ with a personal API token. The daemon nudges via native macOS notifications; sim
 questions are answered directly in the notification, everything else is done by the user in
 their own terminal (the tool never opens terminal windows).
 
-Status: **approved** — Phases 0–3 committed; wizard re-test pending (see §8)
+Status: **approved** — Phases 0–4 committed
 
 ---
 
@@ -311,11 +311,32 @@ after the OpenAPI spec. No automated tests ever write to the real MOCO account.
 - Phase 3 (activities: `log`, `list`, `edit`, `delete`, `alias`, wizard) verified against MOCO
   with one-liners on the sandbox day, committed (`Phase 3: …`).
 - User tested the wizard → feedback applied: empty duration field with hint, ANSI-colour theme.
-  Waiting for the user's re-test of the wizard.
+  Wizard re-test by the user passed (2026-10-08).
 - **Sandbox for write tests: Mon 2026-10-05** (verified empty 2026-10-08), project
   "Intern – nicht verrechenbar" only, always cleaned up, date always given explicitly.
   2026-10-06 was the sandbox until the user entered real data there — never touch it again.
 - **Open for Phase 5:** does an activity's `seconds` include a running timer segment? (`status`
   currently assumes not.)
 
-Next: Phase 4 (offline queue).
+**2026-10-08 — Phase 4 (offline queue)**
+- Writes that fail with a network error or 5xx (`log`, `start`, `stop`, `break`) go to the queue in
+  `state.json` and print a red "MOCO NOT REACHABLE — NOT SAVED IN MOCO YET" block (exit 0: the entry
+  is safe). Edit/delete are not queued; offline they fail with "Nothing was changed in MOCO".
+- Presence writes are queued as **intents** and replayed through the same service logic, so they
+  are checked against the day's state at sync time. Every replay first checks whether MOCO already
+  has the result (the request may have arrived although the answer got lost): log → identical
+  activity created after queueing; start/presence → same `from`; stop → closed at the same `to`;
+  break → both halves present, or the recorded split presence already shortened (then only the
+  rest is created).
+- Every command (via `newService`) first syncs pending items in order and stops at the first
+  unreachable error; a non-blocking `sync.lock` keeps CLI and daemon from sending an item twice.
+- MOCO rejects (4xx / failed local check) → item stays as **FAILED**, never retried automatically,
+  warned about on every command; `moco queue sync` retries it, `moco queue drop <#>` removes it.
+  5xx on the write itself (reads before it worked) → FAILED after 3 tries, so a request MOCO
+  answers with 500 is never retried forever.
+- `moco status` shows queue counts (`queue_pending`/`queue_failed` in `--json`).
+- Verified against MOCO on the sandbox day with an unreachable proxy (`HTTPS_PROXY=http://127.0.0.1:9`):
+  queued start/break/stop/log, auto-sync on the next command, duplicate start skipped, impossible
+  stop kept as FAILED, dropped; sandbox cleaned up.
+
+Next: Phase 5 (timer).

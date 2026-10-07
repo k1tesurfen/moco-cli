@@ -39,17 +39,35 @@ func Execute() int {
 	root.PersistentFlags().BoolVar(&flags.json, "json", false, "machine-readable output")
 	root.AddCommand(loginCmd(), logoutCmd(), statusCmd(), projectsCmd(),
 		startCmd(), breakCmd(), stopCmd(), presenceCmd(),
-		logCmd(), listCmd(), editCmd(), deleteCmd(), aliasCmd())
+		logCmd(), listCmd(), editCmd(), deleteCmd(), aliasCmd(), queueCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
+		if api.IsUnreachable(err) {
+			fmt.Fprintln(os.Stderr, "Nothing was changed in MOCO.")
+			if st, err := store.New().Load(); err == nil {
+				if pending, _ := st.QueueCounts(); pending > 0 {
+					fmt.Fprintf(os.Stderr, "%d %s waiting in the offline queue (`moco queue`).\n", pending, plural(pending, "entry is", "entries are"))
+				}
+			}
+		}
 		return 1
 	}
 	return 0
 }
 
-// newService builds a Service for the logged-in user. The user id is cached in the state file.
+// newService builds a Service for the logged-in user and first sends any queued writes, so they
+// reach MOCO before (and in order with) whatever the command does.
 func newService(ctx context.Context) (*service.Service, error) {
+	svc, err := newServiceNoSync(ctx)
+	if err == nil {
+		autoSync(ctx, svc)
+	}
+	return svc, err
+}
+
+// newServiceNoSync builds a Service without touching the queue. The user id is cached in the state file.
+func newServiceNoSync(ctx context.Context) (*service.Service, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err

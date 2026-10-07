@@ -92,8 +92,12 @@ Durations: 1h30, 90m, 1:30, 1.5 — always rounded up to the configured step (de
 
 			var day service.Day
 			if gap || a.Seconds == 0 {
-				if day, err = svc.Day(ctx, d); err != nil {
+				day, err = svc.Day(ctx, d)
+				if err != nil && (gap || !api.IsUnreachable(err)) {
 					return err
+				}
+				if err != nil {
+					fmt.Fprintln(os.Stderr, alarm.Render("⚠  MOCO not reachable — unlogged time unknown; the entry will be queued."))
 				}
 			}
 			if gap {
@@ -119,6 +123,9 @@ Durations: 1h30, 90m, 1:30, 1.5 — always rounded up to the configured step (de
 			}
 
 			act, err := svc.LogActivity(ctx, d, *a.Project, *a.Task, a.Seconds, a.Description)
+			if queued(err) {
+				return nil
+			}
 			if err != nil {
 				return err
 			}

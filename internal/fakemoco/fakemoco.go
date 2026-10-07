@@ -31,7 +31,38 @@ type Server struct {
 	activities map[int64]*api.Activity
 	projects   map[int64]api.Project
 	Requests   []string // "METHOD /path" log
+
+	down       int  // if non-zero, every request is answered with this status
+	failWrites int  // if non-zero, every non-GET request is answered with this status
+	dropReply  bool // process the next write but answer 502, like a connection lost after sending
 }
+
+// SetDown makes every request fail with status (e.g. 503); 0 brings the fake back up.
+func (s *Server) SetDown(status int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.down = status
+}
+
+// SetFailWrites makes every write fail with status while reads keep working; 0 resets it.
+func (s *Server) SetFailWrites(status int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failWrites = status
+}
+
+// DropNextReply makes the next write succeed on the server but answer 502 to the client.
+func (s *Server) DropNextReply() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dropReply = true
+}
+
+// lostReply discards whatever the handler writes.
+type lostReply struct{ http.ResponseWriter }
+
+func (lostReply) Write(b []byte) (int, error) { return len(b), nil }
+func (lostReply) WriteHeader(int)             {}
 
 // New starts a fake MOCO that is closed when the test ends.
 func New(t *testing.T) *Server {
@@ -87,6 +118,21 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	s.Requests = append(s.Requests, r.Method+" "+r.URL.Path)
 	w.Header().Set("Content-Type", "application/json")
 	path := r.URL.Path
+	if s.down != 0 {
+		w.WriteHeader(s.down)
+		return
+	}
+	if r.Method != http.MethodGet {
+		if s.failWrites != 0 {
+			w.WriteHeader(s.failWrites)
+			return
+		}
+		if s.dropReply {
+			s.dropReply = false
+			w.WriteHeader(http.StatusBadGateway)
+			w = lostReply{w}
+		}
+	}
 
 	switch {
 	case path == "/api/v1/session" && r.Method == http.MethodGet:
