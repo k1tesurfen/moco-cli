@@ -1,0 +1,276 @@
+# moco-cli — Plan
+
+A macOS CLI + TUI + background daemon for logging work time in [MOCO](https://www.mocoapp.com/)
+with a personal API token. The daemon nudges via native macOS notifications; simple yes/no
+questions are answered directly in the notification, everything else is done by the user in
+their own terminal (the tool never opens terminal windows).
+
+Status: **approved** — Phase 0 done (2026-10-07), Phase 1 in progress
+
+---
+
+## 1. Decisions (agreed)
+
+| Topic | Decision |
+|---|---|
+| Language | Go for CLI, TUI, daemon, API client. Swift only for a tiny notification helper app. |
+| API access | Own thin, typed Go client for the endpoints we use (no Python wrapper, no codegen). Types derived from `moco-api-reference.json`. |
+| Binary name | `moco` only (no `mc` – clashes with Midnight Commander / MinIO client). |
+| Install | `make install`: Go binary → `~/.local/bin/moco`, helper → `~/Applications/MocoNotifier.app` (ad-hoc signed). `moco daemon install` writes the LaunchAgent. No Homebrew tap. |
+| Token storage | macOS Keychain. Non-secret config in `~/.config/moco/config.toml`. |
+| Daemon | Long-running process under a launchd LaunchAgent (`RunAtLoad`, `KeepAlive`). |
+| Smart nags | Daemon checks MOCO state before every reminder and skips/adapts if already done. |
+| Missed reminders | After sleep/wake only the latest missed reminder fires (if still relevant). Never a burst. |
+| Days off | Weekends are skipped. Otherwise manual only: `moco pause …`. No MOCO absence / holiday lookup. |
+| Notifications | Only simple questions are answerable in-notification (start, break, end of day). "What did you do" reminders inform + offer **Copy command** / **Snooze** / **Done**. Nothing ever opens a window. |
+| Quick logging | Inline (non-fullscreen) fuzzy wizard + one-liner flags + aliases + "fill the gap". |
+| Full TUI | Day view, week view, project browser, presence editing, add/edit/delete activities. |
+| Durations | Accept `1h30`, `90m`, `1.5`, `1:30`; **always round up** to 15 min (configurable). |
+| Billable / tags | Not exposed. MOCO/project decides billing; user only picks project, task, duration, description. |
+| Home office | Asked in the start prompt: default location (configurable per weekday) on the primary buttons, explicit home/office variants in the Options menu. |
+| Offline | Local queue, synced automatically by the daemon / next command. Output must state **unmistakably** that MOCO was not reachable and the entry is queued. |
+| Timer | In v1. `moco timer start [alias]` → project+task; `moco timer stop` → asks for the description. |
+| Schedule | Configurable in `config.toml`; defaults are the times below. |
+| Language | English for all texts. |
+
+---
+
+## 2. MOCO API usage
+
+Base URL `https://{subdomain}.mocoapp.com/api/v1`, header `Authorization: Token token=<key>`,
+`Content-Type: application/json`. Rate limit 120 req / 2 min → client-side limiter + retry on 429
+(`Retry-After`). Collections are paginated (`page`, `per_page`, `X-Total` / `Link` headers) → client
+follows pages.
+
+| Purpose | Endpoint |
+|---|---|
+| Verify token, get own user id | `GET /session` |
+| My projects + their tasks ("what type of work") | `GET /projects/assigned?active=true` |
+| Read presences for a day/week | `GET /users/presences?from=&to=&user_id=<me>` |
+| Start / end presence | `POST /users/presences` (`date`, `from`, `to?`, `is_home_office`) and `PUT /users/presences/{id}` |
+| Punch-clock style | `POST /users/presences/touch` (`override` = `YYYY-MM-DD HH:MM`, `is_home_office`) |
+| Delete presence | `DELETE /users/presences/{id}` |
+| List activities | `GET /activities?from=&to=&user_id=<me>` |
+| Create / edit / delete activity | `POST /activities` (`date`, `project_id`, `task_id`, `seconds`, `description`), `PUT`, `DELETE /activities/{id}` |
+| Timer | `PATCH /activities/{id}/start_timer`, `PATCH /activities/{id}/stop_timer` (only for today's activities, one timer per user) |
+
+Break model: a day with a break = two presences (`08:00–13:00`, `14:00–17:00`).
+
+### Phase 0 probe results (2026-10-07, `scripts/probe.sh`)
+
+| Finding | Consequence |
+|---|---|
+| `GET /session` → `{id, uuid}` only | User id comes from here; display name from the `user` object of own activities. |
+| `GET /users`, `GET /users/{id}` → `403` (empty body) | Never called. |
+| `GET /activities` without `user_id` returns **all colleagues'** entries | Client always sends `user_id=<me>` for activities. |
+| `GET /users/presences` returns only own presences (same total with/without `user_id`) | `user_id` still sent for clarity. |
+| `GET /projects/assigned?active=true` → 38 projects, each with `customer{id,name}`, `tasks[]{id,name,active,billable}`, `contract{user_id,active}` | One call fills the project/task cache; no per-project task requests. |
+| `GET /projects` works (all 266 company projects) | Not used — assigned projects only. |
+| Activity has `seconds`, `worked_seconds`, `hours` (rounded), `timer_started_at` | Use `seconds`; running timer = `timer_started_at != null`. |
+| Pagination: `X-Total`, `X-Page`, `X-Per-Page`, `Link rel="next"`; default 100/page | Client follows `Link` next. |
+| No rate-limit headers in responses | Client-side limiter (120 / 2 min) + retry on `429`. |
+| Errors (`403`, `404`) have an **empty body** | Error messages derived from status code; JSON body parsed only when present (e.g. `422`). |
+
+Still open (needs write calls, tested manually with explicit OK): `presences/touch` incl. `423 Locked`,
+`start_timer` / `stop_timer` behaviour, `422` error body shape.
+
+---
+
+## 3. Daily reminder flow (defaults)
+
+Workdays Mon–Fri. All times configurable. Every reminder first checks MOCO; "skip" means no
+notification at all.
+
+| Time | Notification | Skip if | Buttons (primary / Options menu) | Effect |
+|---|---|---|---|---|
+| 08:00 | "Did you start working?" | presence exists today, or day paused | **Yes, 08:00** · **Yes, now** / *08:00 (home)*, *08:00 (office)*, *Other time…* (reply field `HH:MM`), *Not yet*, *Day off* | Creates open presence (`from`, no `to`) with location. *Not yet* / no reaction → re-ask once at **09:00**. *Day off* → pauses today. |
+| 12:30 | "Morning: 4h30 present, 2h00 logged — 2h30 missing" | logged ≥ present for the morning | **Copy `moco log`** · **Snooze 30m** / *Done* | Copy puts `moco log` on the clipboard. |
+| 14:00 | "Did you take your break 13:00–14:00?" | presence already split | **Yes, 13–14** · **Different…** (reply field `12:30-13:15`) / *No break yet* | Sets `to=13:00` on the open presence and creates a new open presence from `14:00`. *No break yet* → re-ask in 30 min (once). |
+| 16:30 | "Afternoon: … missing" | logged ≥ present | same as 12:30 | |
+| 17:00 | "Finished for today?" | no open presence | **Yes, 17:00** · **Yes, now** / *Still working* | Closes open presence. *Still working* → re-ask every 30 min, until 20:00 at the latest. If a timer is running, the text says so and stopping the day also offers stopping the timer. |
+
+"Present" / "logged" are computed per half-day (before / after break).
+No reaction to a notification counts as "not answered"; it is never treated as yes.
+
+---
+
+## 4. CLI commands
+
+```
+moco                         # opens the full TUI (same as `moco ui`)
+moco login                   # subdomain + token → verify via /session → Keychain
+moco logout
+moco status                  # today: presences, logged vs present, gap, running timer, queue size
+
+# presences
+moco start [HH:MM] [--home|--office]      # default: now, default location
+moco break [HH:MM-HH:MM]                  # default: configured break window
+moco stop  [HH:MM]                        # close open presence (default: now)
+moco presence list [--week|--date D]
+moco presence edit|delete <id>
+
+# activities
+moco log [alias] [duration] [description] [-p project] [-t task] [-d date]
+                                          # missing parts asked via inline wizard
+moco log --gap                            # prefill duration with current half-day gap
+moco list [--today|--yesterday|--week|--date D|--from D --to D]
+moco edit <id>  /  moco delete <id>
+
+# timer
+moco timer start [alias]                  # wizard for project+task if no alias
+moco timer stop                           # asks description, rounds up, saves
+moco timer status
+
+# projects & aliases
+moco projects [--tasks]                   # assigned projects (cached), fuzzy filter arg
+moco alias add <name> [project/task]      # wizard if omitted
+moco alias list | rm <name>
+
+# days off
+moco pause today | <date> | until <date> | list | clear <date>
+
+# offline queue
+moco queue [list|sync|drop <n>]
+
+# daemon
+moco daemon install | uninstall | start | stop | status | logs
+moco daemon test <event>                  # fire a reminder now, for testing
+moco config [edit|path|get|set]
+```
+
+Global flags: `--json` for machine-readable output on list/status commands, `--debug`.
+
+### Inline wizard (`moco log`)
+Built with `charmbracelet/huh`, inline (no alternate screen):
+1. **Project** – fuzzy search, recently used first (aliases listed too).
+2. **Task** – fuzzy search over the project's active tasks, last used for this project preselected.
+3. **Duration** – prefilled with the half-day gap if > 0; rounding preview ("1h07 → 1h15").
+4. **Description** – free text, required.
+5. **Date** – default today (only shown with `-d` or an option toggle).
+6. Summary + confirm → POST. On failure, the entry goes to the queue with a loud warning.
+
+### Full TUI (`moco ui`)
+Built with `bubbletea` + `lipgloss`, fullscreen:
+- **Day view** – presences and activities of the selected day, totals, gap per half-day;
+  `a` add, `e` edit, `d` delete, `←/→` previous/next day.
+- **Week view** – Mon–Fri totals, present vs logged, gaps highlighted; `enter` jumps to the day.
+- **Projects** – assigned projects → tasks → my hours on them for a selectable period.
+- **Presence editing** – adjust from/to, split/merge for breaks, toggle home office.
+- Status bar: running timer, queued entries, offline indicator.
+
+---
+
+## 5. Architecture
+
+```
+moco-cli/
+├── cmd/moco/main.go
+├── internal/
+│   ├── api/          # HTTP client, auth, rate limiter, pagination, typed models, errors
+│   ├── config/       # config.toml load/save, defaults
+│   ├── secrets/      # Keychain access (go-keychain or `security` CLI)
+│   ├── store/        # local state: cache (projects, me), recents, aliases, pauses, queue, daemon state
+│   ├── timeutil/     # duration parsing, rounding, half-day math, workday logic
+│   ├── service/      # domain logic: start/break/stop, gap calculation, logging, timer, queue sync
+│   ├── cli/          # cobra commands
+│   ├── wizard/       # huh-based inline flows
+│   ├── tui/          # bubbletea app
+│   ├── daemon/       # scheduler, wake detection, reminder rules, IPC with notifier
+│   └── notify/       # Go side of the notifier protocol
+├── notifier/         # Swift package → MocoNotifier.app
+├── Makefile
+└── PLAN.md
+```
+
+### Notification helper (`MocoNotifier.app`)
+- Swift, `UNUserNotificationCenter`, categories with `UNNotificationAction` and
+  `UNTextInputNotificationAction` (for "Other time…" / "Different…").
+- Needs to be an `.app` bundle with its own bundle id (`de.artismedia.moco-notifier` or similar),
+  ad-hoc signed; the user grants notification permission once on first launch.
+- Launched by the daemon as a background agent app (`LSUIElement`, no Dock icon) and kept running.
+- IPC: Unix domain socket at `~/.local/state/moco/notifier.sock`, newline-delimited JSON.
+  Daemon → helper: `{"id","category","title","body","actions":[…]}`;
+  helper → daemon: `{"id","action","text?"}` or `{"id","dismissed":true}`.
+- The helper contains no business logic.
+
+### Daemon
+- Started by LaunchAgent `de.artismedia.moco.daemon` (`moco daemon run`); logs to
+  `~/Library/Logs/moco/daemon.log`.
+- Ticker every 30 s plus wake detection (wall-clock jump) → evaluates the reminder table against
+  local daemon state (fired/answered/snoozed per event per day) and MOCO state.
+- Executes notification answers via `internal/service` (same code paths as the CLI).
+- Syncs the offline queue every few minutes when reachable.
+
+### Local files
+- `~/.config/moco/config.toml` – subdomain, schedule, rounding, default location per weekday, aliases.
+- `~/.local/state/moco/state.json` – recents, pauses, queue, daemon event state, project cache (TTL 1 day,
+  `moco projects --refresh`).
+
+### Example config
+```toml
+subdomain = "artismedia"
+rounding_minutes = 15
+rounding = "up"
+
+[schedule]
+workdays = ["mon", "tue", "wed", "thu", "fri"]
+start = "08:00"
+start_reask = "09:00"
+morning_log = "12:30"
+break_from = "13:00"
+break_to = "14:00"
+break_check = "14:00"
+afternoon_log = "16:30"
+end = "17:00"
+end_reask_every = "30m"
+end_reask_until = "20:00"
+snooze = "30m"
+
+[location]           # default for the primary start buttons
+default = "office"
+mon = "home"
+fri = "home"
+
+[aliases]
+review = { project = "ACME Website", task = "Project management" }
+```
+
+---
+
+## 6. Implementation phases
+
+0. **Probe** – `moco probe` (or a small script) that calls each read endpoint with the personal
+   token and reports status codes and response shapes. Run by you; adjust the plan with the results.
+1. **Foundation** – Go module, config, Keychain, API client (session, projects/assigned, presences,
+   activities), `moco login`, `moco status`, `moco projects`.
+2. **Presences** – `moco start`, `moco break`, `moco stop`, `moco presence list/edit/delete`.
+3. **Activities** – duration parsing/rounding, `moco log` wizard + flags, aliases, recents, gap, `moco list`,
+   `moco edit`, `moco delete`.
+4. **Offline queue** – queue on network/5xx errors, `moco queue` commands, loud warnings.
+5. **Timer** – `moco timer start/stop/status`.
+6. **Notifier app** – Swift helper, socket protocol, `make install`.
+7. **Daemon** – scheduler, reminder rules, wake catch-up, pauses, LaunchAgent install, `moco daemon test`.
+8. **TUI** – day view, week view, project browser, presence editing.
+9. **Polish** – `--json`, README, shell completions.
+
+Testing: unit tests for duration parsing, rounding, half-day/gap math, reminder rule evaluation
+(with a fake clock and a fake MOCO state); API client tested against `httptest` fixtures shaped
+after the OpenAPI spec. No automated tests ever write to the real MOCO account.
+
+---
+
+## 7. Assumptions to confirm on review
+
+- Timer implementation: `moco timer start` creates an activity for today with `seconds=0` and a placeholder
+  description, then calls `start_timer`; `moco timer stop` calls `stop_timer`, rounds the result up, asks
+  for the description and `PUT`s it. Starting a timer while one is running stops the old one first
+  (asking its description).
+- A timer running across the break is left alone; the 14:00 break prompt only mentions it.
+- `moco stop` with a running timer asks whether to stop the timer too.
+- Activities with no presence on that day are allowed (MOCO allows it); `moco status` warns.
+- No colleagues/multi-user features, no impersonation, no reports beyond own hours.
+- Supported macOS: target is **macOS 26 (Tahoe, Darwin 25)**, the version installed now (26.7).
+  The Swift helper is built with the installed SDK (macOS 27 SDK, Swift 6.4) and a deployment target
+  of macOS 26, so it also runs after the planned update to macOS 27 (Darwin 26). Only stable
+  `UserNotifications` APIs are used. If the update breaks anything (e.g. notification permissions,
+  LaunchAgent behaviour), it gets fixed after the update.
