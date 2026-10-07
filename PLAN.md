@@ -312,11 +312,9 @@ after the OpenAPI spec. No automated tests ever write to the real MOCO account.
   with one-liners on the sandbox day, committed (`Phase 3: …`).
 - User tested the wizard → feedback applied: empty duration field with hint, ANSI-colour theme.
   Waiting for the user's re-test of the wizard.
-- Write tests run on the sandbox day **2026-10-06** with project "Intern – nicht verrechenbar" only,
-  always cleaned up. Note: from 2026-10-08 on, `-d y` no longer points at the sandbox day — use the date.
-- **Open:** 2026-10-06 still holds the user's wizard-test data: presence 08:00–12:00, activity
-  "Internes Meeting. Besprechungen." (2h, Intern / Strategie), alias `test`. Ask whether the meeting
-  is real before cleaning up.
+- **Sandbox for write tests: Mon 2026-10-05** (verified empty 2026-10-08), project
+  "Intern – nicht verrechenbar" only, always cleaned up, date always given explicitly.
+  2026-10-06 was the sandbox until the user entered real data there — never touch it again.
 - **Open for Phase 5:** does an activity's `seconds` include a running timer segment? (`status`
   currently assumes not.)
 
