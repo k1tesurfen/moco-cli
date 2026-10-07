@@ -72,6 +72,7 @@ type model struct {
 	help    bool
 
 	prompt  *prompt
+	form    *activityForm
 	confirm *confirmBox
 	ticks   int
 }
@@ -196,6 +197,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.prompt != nil {
 			m.prompt.setWidth(m.popupWidth())
 		}
+		if m.form != nil {
+			m.form.setWidth(m.formWidth() - 4)
+		}
 		return m, nil
 
 	case tickMsg:
@@ -281,9 +285,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.refresh(msg.date)
 
-	case wizardMsg:
-		return m, m.wizardDone(msg)
-
 	case tea.KeyMsg:
 		return m, m.key(msg)
 	}
@@ -298,6 +299,13 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 		cmd, done := m.prompt.update(msg)
 		if done {
 			m.prompt = nil
+		}
+		return cmd
+	}
+	if m.form != nil {
+		cmd, done := m.form.update(msg)
+		if done {
+			m.form = nil
 		}
 		return cmd
 	}
@@ -434,7 +442,11 @@ func (m *model) View() string {
 	screen = strings.Join(lines[:max(0, height)], "\n")
 
 	popup := func(title, foot string, lines []string, w, h int) {
-		screen = overlay(screen, box{title: title, footer: foot, lines: lines, cursor: -1, focused: true}.render(w, h), m.width)
+		top := -1
+		if m.form != nil {
+			top = min(3, max(0, height-h)) // fixed, so the form doesn't jump as its list opens and closes
+		}
+		screen = overlay(screen, box{title: title, footer: foot, lines: lines, cursor: -1, focused: true}.render(w, h), m.width, top)
 	}
 	switch {
 	case m.help:
@@ -443,6 +455,9 @@ func (m *model) View() string {
 	case m.prompt != nil:
 		pl := m.prompt.lines()
 		popup(m.prompt.title, "enter save · tab next · esc cancel", pl, m.popupWidth(), len(pl)+2)
+	case m.form != nil:
+		fl := m.form.lines(m.formWidth() - 4)
+		popup(m.form.title, "tab next field · enter take / save · esc cancel", fl, m.formWidth(), min(height, len(fl)+2))
 	case m.confirm != nil:
 		cl := m.confirm.lines(m.popupWidth() - 4)
 		popup(m.confirm.question, "y yes · n no", cl, m.popupWidth(), len(cl)+2)
@@ -491,7 +506,7 @@ func (m *model) footer() string {
 
 func (m *model) hints() string {
 	switch {
-	case m.prompt != nil, m.confirm != nil:
+	case m.prompt != nil, m.confirm != nil, m.form != nil:
 		return ""
 	case m.help:
 		return keys("any key", "close help")
@@ -513,14 +528,14 @@ func helpLines() []string {
 		{"1 2 3 4 · tab", "week · presence · activities · projects"},
 		{"esc", "back to activities"},
 		{"r", "reload from MOCO"},
-		{"T", "timer: start (wizard) / stop"},
+		{"T", "timer: start / stop"},
 		{"q · ctrl+c", "quit"},
 		{"Days", ""},
 		{"← → · h l", "previous / next day (also ↑↓ in the week panel)"},
 		{"H L · [ ]", "previous / next week"},
 		{"t", "today"},
 		{"Entries", ""},
-		{"a", "add an activity (wizard; Enter on the empty duration = unlogged time)"},
+		{"a", "log an activity (empty duration = the day's unlogged time)"},
 		{"e · enter", "edit the selected activity or presence"},
 		{"d · x", "delete the selected activity or presence"},
 		{"n s b", "new presence (empty end = open) · stop · break"},

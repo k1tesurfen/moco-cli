@@ -189,8 +189,10 @@ the focused one with a green border and a full-width selection bar.
 - Left: **[1] Week** (days with present / logged / status), **[2] Presence** of the selected day,
   **[4] Projects** with my hours in a period. Right: **[3] Activities** of the selected day (or the
   selected project's **Tasks** while the projects panel is focused) above a **Details** panel.
-- `1`–`4` / `tab` focus panels; `←/→` days, `H/L` weeks; `a`/`e`/`d` activities (wizard via
-  `tea.Exec`); `n`/`e`/`s`/`b`/`m`/`o`/`d` presences; prompts and confirmations as popups.
+- `1`–`4` / `tab` focus panels; `←/→` days, `H/L` weeks; `a`/`e`/`d` activities and `T` timer
+  in an in-TUI popup form (one fuzzy list of project / task pairs — recent and aliases first —
+  then duration with rounding preview, empty = unlogged time / current value, and description);
+  `n`/`e`/`s`/`b`/`m`/`o`/`d` presences; prompts and confirmations as popups.
 - Data is loaded per week (two requests) and cached for 5 min; days of a cached week cost no
   request. Navigation into an uncached week is debounced (300 ms), so holding a key only loads
   the week where it stops. Writes invalidate the affected week. Project hours are cached per
@@ -449,5 +451,8 @@ after the OpenAPI spec. No automated tests ever write to the real MOCO account.
   mockups. Week cache + debounced week/period loading (user asked whether skipping through days
   hits the API each time — it did, two requests per day). Tests prove: no request when moving
   inside a cached week, one load after three quick week jumps.
+- The TUI no longer drops out to the inline huh wizard (`tea.Exec`) — user: too much of a context
+  switch. Activity add/edit and timer start are a popup form inside the TUI; the CLI keeps the
+  huh wizard.
 
 Next: Phase 9 (polish: `--json` everywhere, README, shell completions).

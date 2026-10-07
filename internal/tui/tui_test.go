@@ -3,10 +3,12 @@ package tui
 import (
 	"context"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/k1tesurfen/moco-cli/internal/api"
@@ -15,6 +17,11 @@ import (
 	"github.com/k1tesurfen/moco-cli/internal/service"
 	"github.com/k1tesurfen/moco-cli/internal/store"
 )
+
+func TestMain(m *testing.M) {
+	cursorMode = cursor.CursorStatic
+	os.Exit(m.Run())
+}
 
 var now = time.Date(2026, 10, 6, 15, 0, 0, 0, time.Local) // Tuesday
 
@@ -302,5 +309,145 @@ func TestProjectsPanel(t *testing.T) {
 	press(m, "esc")
 	if m.projects.filter != "" || m.focus != pProjects {
 		t.Errorf("esc: filter %q focus %v", m.projects.filter, m.focus)
+	}
+}
+
+func withProjects(m *model) {
+	do(m, func() tea.Msg {
+		return projectsMsg{projects: []api.Project{
+			{ID: 2, Name: "ACME Website", Customer: api.Ref{Name: "ACME"}, Identifier: "P2",
+				Tasks: []api.Task{{ID: 20, Name: "Dev", Active: true}, {ID: 21, Name: "Design", Active: true}}},
+			{ID: 1, Name: "Intern", Customer: api.Ref{Name: "artismedia"}, Identifier: "P1",
+				Tasks: []api.Task{{ID: 10, Name: "Orga", Active: true}}},
+		}}
+	})
+}
+
+func typeText(m *model, s string) {
+	for _, r := range s {
+		if r == ' ' {
+			_, cmd := m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+			do(m, cmd)
+			continue
+		}
+		press(m, string(r))
+	}
+}
+
+func TestLogActivityInPopup(t *testing.T) {
+	m, fake := newTestModel(t)
+	seed(fake)
+	fake.AddProject(api.Project{ID: 2, Name: "ACME Website", Tasks: []api.Task{{ID: 20, Name: "Dev", Active: true}, {ID: 21, Name: "Design", Active: true}}})
+	withProjects(m)
+	do(m, m.ensureWeek(false))
+
+	press(m, "a")
+	if m.form == nil {
+		t.Fatal("no form")
+	}
+	if v := m.View(); !strings.Contains(v, "Log activity · Tue 6 Oct") || !strings.Contains(v, "3h00 not logged yet") {
+		t.Fatalf("popup:\n%s", v)
+	}
+	typeText(m, "acme des")
+	if len(m.form.matches) != 1 {
+		t.Fatalf("%d matches for 'acme des'", len(m.form.matches))
+	}
+	press(m, "enter") // take ACME / Design, on to the duration
+	typeText(m, "1h07")
+	if !strings.Contains(m.View(), "1h07 → 1h15") {
+		t.Error("no rounding preview")
+	}
+	press(m, "enter")
+	typeText(m, "Logo variants")
+	press(m, "enter")
+	if m.form != nil {
+		t.Fatalf("form still open: %s", m.form.err)
+	}
+	as := fake.Activities("2026-10-06")
+	last := as[len(as)-1]
+	if len(as) != 2 || last.Task.ID != 21 || last.Seconds != 75*60 || last.Description != "Logo variants" {
+		t.Fatalf("activities %+v", as)
+	}
+	if !strings.Contains(m.msg, "Logged 1h15 on ACME Website / Design") {
+		t.Errorf("msg %q", m.msg)
+	}
+
+	// Empty duration takes the unlogged time; the recent pair comes first.
+	press(m, "a")
+	if o := m.form.options[0]; o.tag != "↺" || o.pick.Task.ID != 21 {
+		t.Errorf("first option %+v, want the recent ACME / Design", o)
+	}
+	press(m, "enter", "enter")
+	typeText(m, "Rest")
+	press(m, "enter")
+	as = fake.Activities("2026-10-06")
+	if last := as[len(as)-1]; last.Description != "Rest" || last.Seconds != 6*3600-3*3600-75*60 {
+		t.Errorf("gap entry %+v", last)
+	}
+}
+
+func TestPopupValidation(t *testing.T) {
+	m, fake := newTestModel(t)
+	seed(fake)
+	withProjects(m)
+	do(m, m.ensureWeek(false))
+	press(m, "a")
+	typeText(m, "zzz")
+	press(m, "enter")
+	if m.form == nil || !strings.Contains(m.form.err, "no project / task matches") {
+		t.Fatalf("form %+v", m.form)
+	}
+	press(m, "esc")
+	if m.form != nil {
+		t.Fatal("esc did not close the form")
+	}
+	press(m, "a", "enter", "enter", "enter") // no description
+	if m.form == nil || !strings.Contains(m.form.err, "description is required") {
+		t.Fatalf("form %+v", m.form)
+	}
+	if len(fake.Activities("2026-10-06")) != 1 {
+		t.Error("written despite errors")
+	}
+}
+
+func TestEditActivityInPopup(t *testing.T) {
+	m, fake := newTestModel(t)
+	seed(fake)
+	withProjects(m)
+	do(m, m.ensureWeek(false))
+	press(m, "3", "e")
+	if m.form == nil || m.form.chosen == nil || m.form.chosen.Task.ID != 10 || m.form.focus != fDuration {
+		t.Fatalf("form %+v", m.form)
+	}
+	press(m, "enter", "ctrl+u")
+	typeText(m, "Planning v2")
+	press(m, "enter")
+	a := fake.Activities("2026-10-06")[0]
+	if a.Description != "Planning v2" || a.Seconds != 3*3600 {
+		t.Errorf("edited %+v (msg %q)", a, m.msg)
+	}
+	press(m, "e", "enter", "enter") // nothing changed
+	if m.form == nil || !strings.Contains(m.form.err, "nothing changed") {
+		t.Errorf("form %+v", m.form)
+	}
+}
+
+func TestStartTimerInPopup(t *testing.T) {
+	m, fake := newTestModel(t)
+	seed(fake)
+	withProjects(m)
+	do(m, m.ensureWeek(false))
+	press(m, "T")
+	if m.form == nil || !m.form.timer {
+		t.Fatal("no timer form")
+	}
+	typeText(m, "orga")
+	press(m, "enter", "enter")
+	as := fake.Activities("2026-10-06")
+	if last := as[len(as)-1]; !last.TimerRunning() || last.Task.ID != 10 {
+		t.Fatalf("timer activity %+v (msg %q)", last, m.msg)
+	}
+	if m.timer == nil || !strings.Contains(m.View(), "⏱") {
+		t.Error("status bar shows no timer")
 	}
 }

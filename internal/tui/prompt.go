@@ -32,14 +32,7 @@ func newPrompt(title string, submit func([]string) (tea.Cmd, error)) *prompt {
 
 // add appends an input with an initial value.
 func (p *prompt) add(label, value, hint string) *prompt {
-	in := textinput.New()
-	in.Prompt = "› "
-	in.PromptStyle = sKey
-	in.Cursor.Style = sKey
-	in.PlaceholderStyle = sMuted
-	in.CharLimit = 2000
-	in.SetValue(value)
-	in.CursorEnd()
+	in := newInput(value, "")
 	if len(p.fields) == 0 {
 		in.Focus()
 	}

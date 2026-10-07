@@ -90,12 +90,15 @@ func highlight(line string, w int, focused bool) string {
 	return sSelOff.Render(plain)
 }
 
-// overlay draws fg centered on top of bg (both multi-line, ANSI-aware).
-func overlay(bg, fg string, width int) string {
+// overlay draws fg horizontally centered on top of bg (both multi-line, ANSI-aware), at row top
+// or vertically centered if top < 0.
+func overlay(bg, fg string, width, top int) string {
 	bgLines := strings.Split(bg, "\n")
 	fgLines := strings.Split(fg, "\n")
 	fw := lipgloss.Width(fg)
-	top := max(0, (len(bgLines)-len(fgLines))/2)
+	if top < 0 {
+		top = max(0, (len(bgLines)-len(fgLines))/2)
+	}
 	left := max(0, (width-fw)/2)
 	for i, l := range fgLines {
 		j := top + i
