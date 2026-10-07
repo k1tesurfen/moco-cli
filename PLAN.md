@@ -5,7 +5,7 @@ with a personal API token. The daemon nudges via native macOS notifications; sim
 questions are answered directly in the notification, everything else is done by the user in
 their own terminal (the tool never opens terminal windows).
 
-Status: **approved** — Phases 0–8 committed
+Status: **done** — Phases 0–9 committed (v1 complete)
 
 ---
 
@@ -455,4 +455,14 @@ after the OpenAPI spec. No automated tests ever write to the real MOCO account.
   switch. Activity add/edit and timer start are a popup form inside the TUI; the CLI keeps the
   huh wizard.
 
-Next: Phase 9 (polish: `--json` everywhere, README, shell completions).
+**2026-10-08 — Phase 9 (polish)**
+- `--json` added to `pause list`, `daemon status` and `config`; every list/status command has it now.
+- `moco config` (was in §4 but not built yet): list, `get`, `set` (line edit — comments and the
+  rest of the file are kept, result validated before it is written; times normalized, workdays
+  as `mon,tue`, empty weekday location = back to the default), `edit` ($VISUAL/$EDITOR/vi,
+  checked afterwards), `path`. The daemon re-reads the config on every tick.
+- Shell completion: cobra's `moco completion`, plus dynamic values from local data only (aliases,
+  projects for `-p`, tasks of that project for `-t`, config keys, pause dates, queue ids).
+  `make install` writes `_moco` to Homebrew's zsh `site-functions` (on zsh's default fpath).
+- README with install, daily use, TUI keys, reminders, config, offline, scripting, development.
+- Final `make install`; daemon restarted and running, today's reminders scheduled.

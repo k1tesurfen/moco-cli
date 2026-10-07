@@ -41,7 +41,9 @@ func Execute() int {
 	root.PersistentFlags().BoolVar(&flags.json, "json", false, "machine-readable output")
 	root.AddCommand(loginCmd(), logoutCmd(), statusCmd(), projectsCmd(),
 		startCmd(), breakCmd(), stopCmd(), presenceCmd(),
-		logCmd(), listCmd(), editCmd(), deleteCmd(), aliasCmd(), timerCmd(), queueCmd(), pauseCmd(), daemonCmd(), notifierCmd(), uiCmd())
+		logCmd(), listCmd(), editCmd(), deleteCmd(), aliasCmd(), timerCmd(), queueCmd(), pauseCmd(), daemonCmd(), notifierCmd(), uiCmd(), configCmd())
+
+	setupCompletion(root)
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)

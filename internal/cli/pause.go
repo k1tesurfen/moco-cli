@@ -87,15 +87,20 @@ func pauseCmd() *cobra.Command {
 				return err
 			}
 			today := timeutil.Date(time.Now())
-			n := 0
+			upcoming := []string{}
 			for _, d := range st.Pauses {
 				if d >= today {
-					t, _ := time.ParseInLocation(timeutil.DateLayout, d, time.Local)
-					fmt.Println(t.Format("Mon 2 Jan 2006"))
-					n++
+					upcoming = append(upcoming, d)
 				}
 			}
-			if n == 0 {
+			if flags.json {
+				return printJSON(map[string]any{"days_off": upcoming})
+			}
+			for _, d := range upcoming {
+				t, _ := time.ParseInLocation(timeutil.DateLayout, d, time.Local)
+				fmt.Println(t.Format("Mon 2 Jan 2006"))
+			}
+			if len(upcoming) == 0 {
 				fmt.Println("No days off planned.")
 			}
 			return nil

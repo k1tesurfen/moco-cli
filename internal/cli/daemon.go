@@ -241,24 +241,22 @@ func daemonStatusCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pid, loaded := agentPID()
 			_, installErr := os.Stat(agentPlist())
+			daemonState := "not_installed"
 			switch {
 			case pid > 0:
-				fmt.Printf("Daemon running (pid %d).\n", pid)
+				daemonState = "running"
 			case loaded:
-				fmt.Println(alarmOut.Render("Daemon loaded but not running — see `moco daemon logs`."))
+				daemonState = "loaded_not_running"
 			case installErr == nil:
-				fmt.Println("Daemon installed but stopped — `moco daemon start`.")
-			default:
-				fmt.Println("Daemon not installed — `moco daemon install`.")
+				daemonState = "stopped"
 			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
 			defer cancel()
-			if c, err := notify.Dial(ctx, notifierSocket(), ""); err != nil {
-				fmt.Println("Notifier: not running (the daemon starts it).")
-			} else {
+			notifier := ""
+			if c, err := notify.Dial(ctx, notifierSocket(), ""); err == nil {
 				if st, err := c.Ping(ctx); err == nil {
-					fmt.Printf("Notifier: running · notifications %s\n", st.Authorization)
+					notifier = st.Authorization
 				}
 				c.Close()
 			}
@@ -269,29 +267,71 @@ func daemonStatusCmd() *cobra.Command {
 			}
 			now := time.Now()
 			today := now.Format("2006-01-02")
+			type reminder struct {
+				Event string `json:"event"`
+				State string `json:"state"`
+				Next  string `json:"next,omitempty"`
+			}
+			var reminders []reminder
+			if d := st.Daemon; d != nil && d.Date == today {
+				for _, ev := range daemon.Events {
+					e := d.Events[string(ev)]
+					r := reminder{Event: string(ev), State: "scheduled", Next: e.Next.Format("15:04")}
+					switch {
+					case e.Shown && !e.Done:
+						r.State = "shown"
+					case e.Shown:
+						r.State, r.Next = "shown", ""
+					case e.Done && e.Fired > 0:
+						r.State, r.Next = "done", ""
+					case e.Done:
+						r.State, r.Next = "skipped", ""
+					case e.Fired > 0:
+						r.State = "asked_again"
+					}
+					reminders = append(reminders, r)
+				}
+			}
+
+			if flags.json {
+				return printJSON(map[string]any{
+					"daemon": daemonState, "pid": pid, "notifier": notifier,
+					"paused_today": st.Paused(today), "reminders": reminders,
+				})
+			}
+			switch daemonState {
+			case "running":
+				fmt.Printf("Daemon running (pid %d).\n", pid)
+			case "loaded_not_running":
+				fmt.Println(alarmOut.Render("Daemon loaded but not running — see `moco daemon logs`."))
+			case "stopped":
+				fmt.Println("Daemon installed but stopped — `moco daemon start`.")
+			default:
+				fmt.Println("Daemon not installed — `moco daemon install`.")
+			}
+			if notifier == "" {
+				fmt.Println("Notifier: not running (the daemon starts it).")
+			} else {
+				fmt.Printf("Notifier: running · notifications %s\n", notifier)
+			}
 			if st.Paused(today) {
 				fmt.Println("Today is paused (day off).")
 			}
-			if d := st.Daemon; d != nil && d.Date == today {
+			if len(reminders) > 0 {
 				fmt.Println()
-				for _, ev := range daemon.Events {
-					e := d.Events[string(ev)]
-					state := "at " + e.Next.Format("15:04")
-					switch {
-					case e.Shown:
-						state = "on screen, unanswered"
-						if !e.Done {
-							state += " · asked again at " + e.Next.Format("15:04")
-						}
-					case e.Done && e.Fired > 0:
-						state = "done"
-					case e.Done:
-						state = "skipped"
-					case e.Fired > 0:
-						state = "asked again at " + e.Next.Format("15:04")
-					}
-					fmt.Printf("  %-14s %s\n", ev, state)
+			}
+			for _, r := range reminders {
+				text := map[string]string{
+					"scheduled":   "at " + r.Next,
+					"shown":       "on screen, unanswered",
+					"done":        "done",
+					"skipped":     "skipped",
+					"asked_again": "asked again at " + r.Next,
+				}[r.State]
+				if r.State == "shown" && r.Next != "" {
+					text += " · asked again at " + r.Next
 				}
+				fmt.Printf("  %-14s %s\n", r.Event, text)
 			}
 			return nil
 		},

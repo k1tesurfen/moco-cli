@@ -3,6 +3,8 @@
 PREFIX ?= $(HOME)/.local
 APPDIR ?= $(HOME)/Applications
 APP     = build/MocoNotifier.app
+# zsh completion: Homebrew's site-functions directory is on zsh's default fpath.
+ZSH_COMPLETIONS ?= $(shell brew --prefix 2>/dev/null || echo /usr/local)/share/zsh/site-functions
 
 .PHONY: all build moco app test install uninstall clean
 
@@ -27,6 +29,8 @@ test:
 install: build
 	mkdir -p $(PREFIX)/bin $(APPDIR)
 	install -m 0755 bin/moco $(PREFIX)/bin/moco
+	@if [ -w "$(ZSH_COMPLETIONS)" ]; then bin/moco completion zsh > "$(ZSH_COMPLETIONS)/_moco" && echo "Installed zsh completion $(ZSH_COMPLETIONS)/_moco"; \
+	else echo "Skipped zsh completion ($(ZSH_COMPLETIONS) not writable) — see README"; fi
 	@pkill -x MocoNotifier || true
 	rm -rf $(APPDIR)/MocoNotifier.app
 	cp -R $(APP) $(APPDIR)/
@@ -36,6 +40,7 @@ install: build
 uninstall:
 	@pkill -x MocoNotifier || true
 	rm -f $(PREFIX)/bin/moco
+	rm -f "$(ZSH_COMPLETIONS)/_moco"
 	rm -rf $(APPDIR)/MocoNotifier.app
 
 clean:
