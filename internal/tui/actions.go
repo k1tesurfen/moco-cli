@@ -250,4 +250,3 @@ func (m *model) deleteSelected() {
 		}
 	}
 }
-
