@@ -1,9 +1,7 @@
 package tui
 
 import (
-	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,12 +14,9 @@ import (
 type projectsState struct {
 	list      []api.Project
 	period    int
-	hours     *service.Hours
-	hoursKey  string
-	loading   bool
+	hours     map[string]*service.Hours // by period key
+	loading   map[string]bool
 	cursor    int
-	open      *api.Project
-	task      int
 	filtering bool
 	filter    string
 }
@@ -57,6 +52,14 @@ func periodRange(i int, now time.Time) (time.Time, time.Time) {
 	return mon, mon.AddDate(0, 0, 6)
 }
 
+func (m *model) periodKey() string {
+	from, to := periodRange(m.projects.period, m.svc.Now())
+	return timeutil.Date(from) + "/" + timeutil.Date(to)
+}
+
+// hours returns the cached hours of the selected period (nil while not loaded).
+func (m *model) hours() *service.Hours { return m.projects.hours[m.periodKey()] }
+
 func (m *model) loadProjects(refresh bool) tea.Cmd {
 	return func() tea.Msg {
 		ps, err := m.svc.Projects(m.ctx, refresh)
@@ -64,14 +67,20 @@ func (m *model) loadProjects(refresh bool) tea.Cmd {
 	}
 }
 
-func (m *model) loadHours(force bool) tea.Cmd {
-	from, to := periodRange(m.projects.period, m.svc.Now())
-	key := timeutil.Date(from) + "/" + timeutil.Date(to)
-	if !force && m.projects.hours != nil && m.projects.hoursKey == key {
+// ensureHours loads the hours of the selected period unless cached; with delay it waits for
+// the period switching to settle.
+func (m *model) ensureHours(delay bool) tea.Cmd {
+	key := m.periodKey()
+	if m.projects.hours[key] != nil || m.projects.loading[key] {
 		return nil
 	}
-	m.projects.loading = true
-	m.projects.hoursKey = key
+	m.hoursSeq++
+	if delay {
+		seq := m.hoursSeq
+		return tea.Tick(debounceDelay, func(time.Time) tea.Msg { return debounceMsg{seq, debounceHours} })
+	}
+	m.projects.loading[key] = true
+	from, to := periodRange(m.projects.period, m.svc.Now())
 	return func() tea.Msg {
 		acts, err := m.svc.ActivitiesBetween(m.ctx, from, to)
 		return hoursMsg{key, service.SumHours(acts, m.svc.Now()), err}
@@ -79,13 +88,10 @@ func (m *model) loadHours(force bool) tea.Cmd {
 }
 
 func (m *model) hoursLoaded(msg hoursMsg) {
-	if msg.key != m.projects.hoursKey {
-		return
-	}
-	m.projects.loading = false
+	delete(m.projects.loading, msg.key)
 	m.noteErr(msg.err)
 	if msg.err == nil {
-		m.projects.hours = &msg.hours
+		m.projects.hours[msg.key] = &msg.hours
 	}
 }
 
@@ -96,36 +102,23 @@ func (m *model) visibleProjects() []api.Project {
 		ps = service.FindProjects(ps, m.projects.filter)
 	}
 	out := append([]api.Project{}, ps...)
-	if h := m.projects.hours; h != nil {
+	if h := m.hours(); h != nil {
 		sort.SliceStable(out, func(i, j int) bool { return h.ByProject[out[i].ID] > h.ByProject[out[j].ID] })
 	}
 	return out
 }
 
-type taskRow struct {
-	task    api.Task
-	seconds int
-}
-
-// visibleTasks lists the open project's active tasks plus inactive ones with hours.
-func (m *model) visibleTasks() []taskRow {
-	p := m.projects.open
-	var byTask map[int64]int
-	if h := m.projects.hours; h != nil {
-		byTask = h.ByTask[p.ID]
+func (m *model) selProject() *api.Project {
+	ps := m.visibleProjects()
+	if m.projects.cursor < len(ps) {
+		return &ps[m.projects.cursor]
 	}
-	var rows []taskRow
-	for _, t := range p.Tasks {
-		if t.Active || byTask[t.ID] > 0 {
-			rows = append(rows, taskRow{t, byTask[t.ID]})
-		}
-	}
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].seconds > rows[j].seconds })
-	return rows
+	return nil
 }
 
 func (m *model) projectsKey(msg tea.KeyMsg) tea.Cmd {
 	s := &m.projects
+	n := len(m.visibleProjects())
 	if s.filtering {
 		switch msg.Type {
 		case tea.KeyEsc:
@@ -139,34 +132,20 @@ func (m *model) projectsKey(msg tea.KeyMsg) tea.Cmd {
 		case tea.KeyUp:
 			s.cursor = max(0, s.cursor-1)
 		case tea.KeyDown:
-			s.cursor = min(len(m.visibleProjects())-1, s.cursor+1)
+			s.cursor = clamp(s.cursor+1, 0, n-1)
 		case tea.KeyRunes, tea.KeySpace:
 			s.filter += string(msg.Runes)
 			s.cursor = 0
 		}
 		return nil
 	}
-
 	switch msg.String() {
 	case "p":
 		s.period = (s.period + 1) % len(periodNames)
-		return m.loadHours(false)
+		return m.ensureHours(true)
 	case "P":
 		s.period = (s.period + len(periodNames) - 1) % len(periodNames)
-		return m.loadHours(false)
-	}
-	if s.open != nil {
-		switch msg.String() {
-		case "esc", "left", "h", "backspace":
-			s.open = nil
-		case "up", "k":
-			s.task = max(0, s.task-1)
-		case "down", "j":
-			s.task = min(len(m.visibleTasks())-1, s.task+1)
-		}
-		return nil
-	}
-	switch msg.String() {
+		return m.ensureHours(true)
 	case "/":
 		s.filtering = true
 	case "esc":
@@ -174,93 +153,96 @@ func (m *model) projectsKey(msg tea.KeyMsg) tea.Cmd {
 	case "up", "k":
 		s.cursor = max(0, s.cursor-1)
 	case "down", "j":
-		s.cursor = min(len(m.visibleProjects())-1, s.cursor+1)
-	case "enter", "right", "l":
-		ps := m.visibleProjects()
-		if s.cursor < len(ps) {
-			p := ps[s.cursor]
-			s.open, s.task = &p, 0
-		}
+		s.cursor = clamp(s.cursor+1, 0, n-1)
+	case "home", "g":
+		s.cursor = 0
+	case "end", "G":
+		s.cursor = max(0, n-1)
 	}
 	return nil
 }
 
-func (m *model) projectsView(height int) string {
+func (m *model) projectsBox() box {
 	s := &m.projects
-	from, to := periodRange(s.period, m.svc.Now())
-	var lines []string
-	add := func(x string) { lines = append(lines, x) }
-
-	header := sTitle.Render(periodNames[s.period]) + sMuted.Render(fmt.Sprintf(" · %s – %s", from.Format("2 Jan"), to.Format("2 Jan 2006")))
-	switch {
-	case s.loading:
-		header += sMuted.Render(" · loading…")
-	case s.hours != nil:
-		header += sMuted.Render(" · total ") + timeutil.FormatSeconds(s.hours.Total)
+	b := box{
+		title:   "[4] Projects · " + periodNames[s.period],
+		cursor:  s.cursor,
+		focused: m.focus == pProjects,
+		offset:  &m.offsets[pProjects],
 	}
-	add(header)
 	if s.list == nil {
-		add("")
-		add(sMuted.Render("Loading projects…"))
-		return strings.Join(lines, "\n")
+		b.lines, b.cursor = []string{sMuted.Render("loading…")}, -1
+		return b
 	}
-
-	if s.open != nil {
-		p := s.open
-		add(sProject.Render(p.Name) + sMuted.Render(" · "+p.Customer.Name+" · "+p.Identifier))
-		add("")
-		rows := m.visibleTasks()
-		if len(rows) == 0 {
-			add(sMuted.Render("  no active tasks"))
-		}
-		cursorLine := 0
-		for i, r := range rows {
-			on := i == s.task
-			if on {
-				cursorLine = len(lines)
-			}
-			name := r.task.Name
-			if !r.task.Active {
-				name += sMuted.Render(" (inactive)")
-			}
-			row := pad(clip(name, max(20, m.width-16)), max(20, m.width-16)) + padLeft(dashIfZero(r.seconds), 8)
-			if on {
-				row = sSelected.Render(row)
-			}
-			add(cursor(on) + row)
-		}
-		return window(lines, cursorLine, height)
-	}
-
-	filter := sMuted.Render("/ to filter")
-	if s.filtering || s.filter != "" {
-		filter = sSection.Render("Filter: ") + s.filter
-		if s.filtering {
-			filter += sCursor.Render("█")
-		}
-	}
-	add(filter)
-	ps := m.visibleProjects()
-	if len(ps) == 0 {
-		add(sMuted.Render("  no matching project"))
-	}
-	nameW := max(20, m.width-16)
-	cursorLine := 0
-	for i, p := range ps {
-		on := i == s.cursor
-		if on {
-			cursorLine = len(lines)
-		}
+	h := m.hours()
+	for _, p := range m.visibleProjects() {
 		sec := 0
-		if s.hours != nil {
-			sec = s.hours.ByProject[p.ID]
+		if h != nil {
+			sec = h.ByProject[p.ID]
 		}
-		name := sProject.Render(p.Name) + sMuted.Render(" · "+p.Customer.Name+" · "+p.Identifier)
-		row := pad(clip(name, nameW), nameW) + padLeft(dashIfZero(sec), 8)
-		if on {
-			row = sSelected.Render(row)
+		name := p.Name
+		hrs := padLeft(dashIfZero(sec), 6)
+		if sec == 0 {
+			hrs = sMuted.Render(hrs)
 		}
-		add(cursor(on) + row)
+		b.lines = append(b.lines, sProject.Render(name))
+		b.right = append(b.right, hrs)
 	}
-	return window(lines, cursorLine, height)
+	if len(b.lines) == 0 {
+		b.lines, b.cursor = []string{sMuted.Render("no matching project")}, -1
+	}
+	switch {
+	case s.filtering:
+		b.footer = "/" + s.filter + "█"
+	case s.filter != "":
+		b.footer = "/" + s.filter
+	case m.projects.loading[m.periodKey()]:
+		b.footer = "loading…"
+	case h != nil:
+		b.footer = timeutil.FormatSeconds(h.Total)
+	}
+	return b
+}
+
+// tasksBox is the main panel while the projects panel is focused: the selected project's tasks
+// with their hours in the period.
+func (m *model) tasksBox() box {
+	p := m.selProject()
+	b := box{title: "Tasks", cursor: -1}
+	if p == nil {
+		return b
+	}
+	b.title = "Tasks · " + p.Name
+	var byTask map[int64]int
+	if h := m.hours(); h != nil {
+		byTask = h.ByTask[p.ID]
+		b.footer = periodNames[m.projects.period] + " · " + timeutil.FormatSeconds(h.ByProject[p.ID])
+	}
+	type row struct {
+		t   api.Task
+		sec int
+	}
+	var rows []row
+	for _, t := range p.Tasks {
+		if t.Active || byTask[t.ID] > 0 {
+			rows = append(rows, row{t, byTask[t.ID]})
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].sec > rows[j].sec })
+	for _, r := range rows {
+		name := r.t.Name
+		if !r.t.Active {
+			name += sMuted.Render(" (inactive)")
+		}
+		hrs := padLeft(dashIfZero(r.sec), 6)
+		if r.sec == 0 {
+			hrs = sMuted.Render(hrs)
+		}
+		b.lines = append(b.lines, name)
+		b.right = append(b.right, hrs)
+	}
+	if len(rows) == 0 {
+		b.lines = []string{sMuted.Render("no active tasks")}
+	}
+	return b
 }

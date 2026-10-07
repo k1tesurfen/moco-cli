@@ -66,9 +66,9 @@ func (m *model) runWizard(res *wizardMsg, fn func(env wizard.Env) error) tea.Cmd
 }
 
 func (m *model) addActivity() tea.Cmd {
-	date, gap := m.day.date, 0
-	if m.day.data != nil {
-		gap = m.day.data.Gap()
+	date, gap := m.date, 0
+	if d := m.selDay(); d != nil {
+		gap = d.Gap()
 	}
 	res := &wizardMsg{kind: wizAdd}
 	return m.runWizard(res, func(env wizard.Env) error {

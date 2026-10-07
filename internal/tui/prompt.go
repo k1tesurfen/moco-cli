@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // field is one input of a prompt.
@@ -33,8 +34,8 @@ func newPrompt(title string, submit func([]string) (tea.Cmd, error)) *prompt {
 func (p *prompt) add(label, value, hint string) *prompt {
 	in := textinput.New()
 	in.Prompt = "› "
-	in.PromptStyle = sCursor
-	in.Cursor.Style = sCursor
+	in.PromptStyle = sKey
+	in.Cursor.Style = sKey
 	in.PlaceholderStyle = sMuted
 	in.CharLimit = 2000
 	in.SetValue(value)
@@ -91,29 +92,29 @@ func (p *prompt) update(msg tea.KeyMsg) (cmd tea.Cmd, done bool) {
 	return c, false
 }
 
-func (p *prompt) view() string {
-	var b strings.Builder
-	b.WriteString(sTitle.Render(p.title) + "\n")
+// lines renders the form for a popup box (title and keys are drawn by the box).
+func (p *prompt) lines() []string {
+	var out []string
 	if p.note != "" {
-		b.WriteString(sMuted.Render(p.note) + "\n")
+		out = append(out, sMuted.Render(p.note))
 	}
 	for i, f := range p.fields {
-		b.WriteString("\n")
+		if len(out) > 0 {
+			out = append(out, "")
+		}
 		label := sMuted.Render(f.label)
 		if i == p.focus {
 			label = sSection.Render(f.label)
 		}
-		b.WriteString(label)
 		if f.hint != "" {
-			b.WriteString("  " + sMuted.Render(f.hint))
+			label += "  " + sMuted.Render(f.hint)
 		}
-		b.WriteString("\n" + f.input.View() + "\n")
+		out = append(out, label, f.input.View())
 	}
 	if p.err != "" {
-		b.WriteString("\n" + sErr.Render(p.err) + "\n")
+		out = append(out, "", sErr.Render(p.err))
 	}
-	b.WriteString("\n" + keys("enter", "save", "tab", "next field", "esc", "cancel"))
-	return b.String()
+	return out
 }
 
 // confirmBox asks a yes/no question; yes is called (on the event loop) when confirmed.
@@ -133,10 +134,9 @@ func (c *confirmBox) update(msg tea.KeyMsg) (cmd tea.Cmd, done bool) {
 	return nil, false
 }
 
-func (c *confirmBox) view() string {
-	s := sTitle.Render(c.question) + "\n"
-	if c.detail != "" {
-		s += "\n" + c.detail + "\n"
+func (c *confirmBox) lines(w int) []string {
+	if c.detail == "" {
+		return []string{sMuted.Render("Press y to confirm.")}
 	}
-	return s + "\n" + keys("y", "yes", "n", "no")
+	return strings.Split(ansi.Wordwrap(c.detail, max(10, w), " "), "\n")
 }

@@ -39,7 +39,7 @@ func (s *Service) Days(ctx context.Context, from, to time.Time) ([]Day, error) {
 		ds := timeutil.Date(d)
 		acts := as[ds]
 		sort.SliceStable(acts, func(i, j int) bool { return acts[i].CreatedAt.Before(acts[j].CreatedAt) })
-		day, err := buildDay(ds, ps[ds], acts, s.Now())
+		day, err := BuildDay(ds, ps[ds], acts, s.Now())
 		if err != nil {
 			return nil, err
 		}

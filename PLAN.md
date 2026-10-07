@@ -184,13 +184,18 @@ green selection/confirm, grey hints, cyan project/task, red errors), so they fol
 terminal colour scheme. Plain command output (`status`, `list`) gets the same palette in Phase 8.
 
 ### Full TUI (`moco ui`)
-Built with `bubbletea` + `lipgloss`, fullscreen:
-- **Day view** – presences and activities of the selected day, totals, gap of the day;
-  `a` add, `e` edit, `d` delete, `←/→` previous/next day.
-- **Week view** – Mon–Fri totals, present vs logged, gaps highlighted; `enter` jumps to the day.
-- **Projects** – assigned projects → tasks → my hours on them for a selectable period.
-- **Presence editing** – adjust from/to, split/merge for breaks, toggle home office.
-- Status bar: running timer, queued entries, offline indicator.
+Built with `bubbletea` + `lipgloss`, fullscreen, lazygit-style: one screen of bordered panels,
+the focused one with a green border and a full-width selection bar.
+- Left: **[1] Week** (days with present / logged / status), **[2] Presence** of the selected day,
+  **[4] Projects** with my hours in a period. Right: **[3] Activities** of the selected day (or the
+  selected project's **Tasks** while the projects panel is focused) above a **Details** panel.
+- `1`–`4` / `tab` focus panels; `←/→` days, `H/L` weeks; `a`/`e`/`d` activities (wizard via
+  `tea.Exec`); `n`/`e`/`s`/`b`/`m`/`o`/`d` presences; prompts and confirmations as popups.
+- Data is loaded per week (two requests) and cached for 5 min; days of a cached week cost no
+  request. Navigation into an uncached week is debounced (300 ms), so holding a key only loads
+  the week where it stops. Writes invalidate the affected week. Project hours are cached per
+  period, period switching is debounced too.
+- Status line: running timer, queued entries, offline marker, last message.
 
 ---
 
@@ -438,5 +443,11 @@ after the OpenAPI spec. No automated tests ever write to the real MOCO account.
   add 08:00–17:00, break 13–14, merge, location home/office, edit to 16:30, delete activity and
   presence → sandbox empty again. **Not tested live:** the wizard via `tea.Exec` (`a`, `e` on an
   activity, `T`) — needs a real terminal; for the user to try.
+
+**2026-10-08 — Phase 8 follow-up (user feedback: "I get lost in the rows")**
+- TUI redone as a lazygit-style single screen of panels (see §4), chosen by the user from two
+  mockups. Week cache + debounced week/period loading (user asked whether skipping through days
+  hits the API each time — it did, two requests per day). Tests prove: no request when moving
+  inside a cached week, one load after three quick week jumps.
 
 Next: Phase 9 (polish: `--json` everywhere, README, shell completions).

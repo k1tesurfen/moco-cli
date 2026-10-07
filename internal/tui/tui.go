@@ -1,5 +1,6 @@
-// Package tui is the fullscreen interface (`moco` / `moco ui`): day view, week view, project
-// browser and presence editing. All MOCO access goes through internal/service, like the CLI.
+// Package tui is the fullscreen interface (`moco` / `moco ui`) in the style of lazygit: one
+// screen of bordered panels — week, presence, projects on the left; activities (or tasks) and
+// details on the right. All MOCO access goes through internal/service, like the CLI.
 package tui
 
 import (
@@ -10,22 +11,21 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/k1tesurfen/moco-cli/internal/api"
 	"github.com/k1tesurfen/moco-cli/internal/service"
 	"github.com/k1tesurfen/moco-cli/internal/timeutil"
 )
 
-type view int
+type panel int
 
 const (
-	dayView view = iota
-	weekView
-	projectsView
+	pWeek panel = iota
+	pPresence
+	pActivities
+	pProjects
+	panelCount
 )
-
-var viewNames = []string{"Day", "Week", "Projects"}
 
 // Run starts the TUI and blocks until the user quits.
 func Run(ctx context.Context, svc *service.Service) error {
@@ -48,13 +48,18 @@ const (
 type model struct {
 	ctx    context.Context
 	svc    *service.Service
-	view   view
 	width  int
 	height int
 
-	day      dayState
-	week     weekState
-	projects projectsState
+	focus      panel
+	date       time.Time // selected day
+	weeks      map[string]*weekCache
+	weekSeq    int
+	hoursSeq   int
+	presCursor int
+	actCursor  int
+	offsets    [panelCount]int
+	projects   projectsState
 
 	timer           *api.Activity
 	pending, failed int
@@ -72,11 +77,10 @@ type model struct {
 }
 
 func newModel(ctx context.Context, svc *service.Service) *model {
-	now := svc.Now()
-	m := &model{ctx: ctx, svc: svc, width: 80, height: 24}
-	m.day.date = midnight(now)
-	m.week.start = service.Monday(now)
-	m.week.cursor = int(m.day.date.Sub(m.week.start).Hours() / 24)
+	m := &model{ctx: ctx, svc: svc, width: 100, height: 30, focus: pActivities, weeks: map[string]*weekCache{}}
+	m.date = midnight(svc.Now())
+	m.projects.hours = map[string]*service.Hours{}
+	m.projects.loading = map[string]bool{}
 	return m
 }
 
@@ -103,8 +107,9 @@ type syncMsg struct {
 	err error
 }
 
-// doneMsg is the result of a write. err may be a *service.QueuedError.
+// doneMsg is the result of a write on date. err may be a *service.QueuedError.
 type doneMsg struct {
+	date time.Time
 	text string
 	err  error
 }
@@ -114,7 +119,7 @@ func tick() tea.Cmd {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.loadDay(), m.loadTimer(), m.loadQueue(), m.loadProjects(false), tick())
+	return tea.Batch(m.ensureWeek(false), m.loadTimer(), m.loadQueue(), m.loadProjects(false), m.ensureHours(false), tick())
 }
 
 func (m *model) loadTimer() tea.Cmd {
@@ -143,35 +148,30 @@ func (m *model) syncQueue() tea.Cmd {
 	}
 }
 
-// write runs a MOCO write in the background and reports its outcome as a doneMsg.
+// write runs a MOCO write for the selected day in the background and reports a doneMsg.
 func (m *model) write(fn func(ctx context.Context) (string, error)) tea.Cmd {
 	m.busy++
 	m.setMsg(msgInfo, "Saving…")
+	date := m.date
 	return func() tea.Msg {
 		text, err := fn(m.ctx)
-		return doneMsg{text, err}
+		return doneMsg{date, text, err}
 	}
 }
 
-// reload refreshes whatever the current view shows plus timer and queue.
-func (m *model) reload() tea.Cmd {
-	cmds := []tea.Cmd{m.loadTimer(), m.loadQueue(), m.loadDay()}
-	if m.view == weekView || m.week.days != nil {
-		cmds = append(cmds, m.loadWeek())
-	}
-	if m.view == projectsView {
-		cmds = append(cmds, m.loadHours(true))
-	} else {
-		m.projects.hours = nil // reloaded when the view is opened again
-	}
-	return tea.Batch(cmds...)
+// refresh drops cached data of date's week and the project hours, then reloads what is shown.
+func (m *model) refresh(date time.Time) tea.Cmd {
+	m.invalidate(date)
+	m.projects.hours = map[string]*service.Hours{}
+	m.projects.loading = map[string]bool{}
+	return tea.Batch(m.loadTimer(), m.loadQueue(), m.ensureWeek(false), m.ensureHours(false))
 }
 
 func (m *model) setMsg(k msgKind, text string) {
 	m.msgKind, m.msg = k, text
 }
 
-// noteErr shows an error and tracks whether MOCO is reachable.
+// noteErr shows a load error and tracks whether MOCO is reachable.
 func (m *model) noteErr(err error) {
 	if err == nil {
 		m.offline = false
@@ -194,7 +194,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		if m.prompt != nil {
-			m.prompt.setWidth(m.width)
+			m.prompt.setWidth(m.popupWidth())
 		}
 		return m, nil
 
@@ -204,13 +204,33 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pending > 0 && !m.syncing {
 			cmds = append(cmds, m.syncQueue())
 		}
-		if m.ticks%10 == 0 { // every 5 minutes
-			cmds = append(cmds, m.loadTimer(), m.loadDay())
-			if m.view == weekView {
-				cmds = append(cmds, m.loadWeek())
-			}
+		if m.ticks%10 == 0 { // every 5 minutes; the week reloads once its cache is stale
+			cmds = append(cmds, m.loadTimer(), m.ensureWeek(false))
 		}
 		return m, tea.Batch(cmds...)
+
+	case debounceMsg:
+		switch {
+		case msg.kind == debounceWeek && msg.seq == m.weekSeq:
+			return m, m.ensureWeek(false)
+		case msg.kind == debounceHours && msg.seq == m.hoursSeq:
+			return m, m.ensureHours(false)
+		}
+		return m, nil
+
+	case weekMsg:
+		return m, m.weekLoaded(msg)
+
+	case projectsMsg:
+		m.noteErr(msg.err)
+		if msg.err == nil {
+			m.projects.list = msg.projects
+		}
+		return m, nil
+
+	case hoursMsg:
+		m.hoursLoaded(msg)
+		return m, nil
 
 	case timerMsg:
 		if msg.err == nil {
@@ -234,7 +254,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case len(msg.res.Sent) > 0:
 			m.offline = false
 			m.setMsg(msgOK, fmt.Sprintf("Synced %d queued %s to MOCO.", len(msg.res.Sent), plural(len(msg.res.Sent), "entry", "entries")))
-			return m, m.reload()
+			for _, it := range msg.res.Sent {
+				if d, err := time.ParseInLocation(timeutil.DateLayout, it.Date, m.svc.Now().Location()); err == nil {
+					m.invalidate(d)
+				}
+			}
+			return m, m.refresh(m.date)
 		}
 		return m, m.loadQueue()
 
@@ -254,10 +279,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.offline = false
 			m.setMsg(msgOK, msg.text)
 		}
-		return m, m.reload()
-
-	case dayMsg, weekMsg, projectsMsg, hoursMsg:
-		return m, m.updateData(msg)
+		return m, m.refresh(msg.date)
 
 	case wizardMsg:
 		return m, m.wizardDone(msg)
@@ -290,7 +312,7 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 		m.help = false
 		return nil
 	}
-	if m.view == projectsView && m.projects.filtering {
+	if m.focus == pProjects && m.projects.filtering {
 		return m.projectsKey(msg)
 	}
 
@@ -300,46 +322,96 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 	case "?":
 		m.help = true
 		return nil
-	case "1":
-		return m.switchView(dayView)
-	case "2":
-		return m.switchView(weekView)
-	case "3":
-		return m.switchView(projectsView)
+	case "1", "2", "3", "4":
+		m.focus = panel(msg.String()[0] - '1')
+		return nil
 	case "tab":
-		return m.switchView((m.view + 1) % 3)
+		m.focus = (m.focus + 1) % panelCount
+		return nil
 	case "shift+tab":
-		return m.switchView((m.view + 2) % 3)
+		m.focus = (m.focus + panelCount - 1) % panelCount
+		return nil
+	case "esc":
+		if m.focus != pProjects || m.projects.filter == "" {
+			m.focus = pActivities
+			return nil
+		}
 	case "r":
 		m.setMsg(msgInfo, "Reloading…")
-		if m.view == projectsView {
-			return tea.Batch(m.reload(), m.loadProjects(true))
+		cmds := []tea.Cmd{m.refresh(m.date)}
+		if m.focus == pProjects {
+			cmds = append(cmds, m.loadProjects(true))
 		}
-		return m.reload()
+		return tea.Batch(cmds...)
 	case "T":
 		return m.timerKey()
 	}
-	switch m.view {
-	case dayView:
-		return m.dayKey(msg)
-	case weekView:
-		return m.weekKey(msg)
-	default:
+	if m.focus == pProjects {
 		return m.projectsKey(msg)
 	}
+	return m.dayKey(msg)
 }
 
-func (m *model) switchView(v view) tea.Cmd {
-	m.view = v
-	switch v {
-	case weekView:
-		if m.week.days == nil {
-			return m.loadWeek()
+// dayKey handles the keys of the week, presence and activities panels.
+func (m *model) dayKey(msg tea.KeyMsg) tea.Cmd {
+	d := m.selDay()
+	switch msg.String() {
+	case "left", "h":
+		return m.stepDay(-1)
+	case "right", "l":
+		return m.stepDay(1)
+	case "H", "[":
+		return m.selectDate(m.date.AddDate(0, 0, -7))
+	case "L", "]":
+		return m.selectDate(m.date.AddDate(0, 0, 7))
+	case "t":
+		return m.selectDate(m.today())
+	case "up", "k":
+		switch m.focus {
+		case pWeek:
+			return m.stepDay(-1)
+		case pPresence:
+			m.presCursor = max(0, m.presCursor-1)
+		case pActivities:
+			m.actCursor = max(0, m.actCursor-1)
 		}
-	case projectsView:
-		if m.projects.hours == nil {
-			return m.loadHours(false)
+	case "down", "j":
+		switch {
+		case m.focus == pWeek:
+			return m.stepDay(1)
+		case m.focus == pPresence && d != nil:
+			m.presCursor = clamp(m.presCursor+1, 0, len(d.Presences)-1)
+		case m.focus == pActivities && d != nil:
+			m.actCursor = clamp(m.actCursor+1, 0, len(d.Activities)-1)
 		}
+	case "home", "g":
+		m.presCursor, m.actCursor = 0, 0
+	case "end", "G":
+		if d != nil {
+			m.presCursor, m.actCursor = max(0, len(d.Presences)-1), max(0, len(d.Activities)-1)
+		}
+	case "enter":
+		if m.focus == pWeek {
+			m.focus = pActivities
+			return nil
+		}
+		return m.editSelected()
+	case "e":
+		return m.editSelected()
+	case "a":
+		return m.addActivity()
+	case "d", "x":
+		m.deleteSelected()
+	case "n":
+		m.newPresence()
+	case "s":
+		m.stopPresence()
+	case "b":
+		m.breakPresence()
+	case "m":
+		m.mergePresence()
+	case "o":
+		return m.toggleLocation()
 	}
 	return nil
 }
@@ -347,61 +419,42 @@ func (m *model) switchView(v view) tea.Cmd {
 // ---- view ----
 
 func (m *model) View() string {
-	header := m.tabs()
 	footer := m.footer()
-	bodyHeight := m.height - lineCount(header) - lineCount(footer) - 1
-	var body string
-	switch {
-	case m.help:
-		body = helpText(m.width)
-	case m.prompt != nil:
-		body = m.prompt.view()
-	case m.confirm != nil:
-		body = m.confirm.view()
-	case m.view == dayView:
-		body = m.dayView(bodyHeight)
-	case m.view == weekView:
-		body = m.weekView(bodyHeight)
-	default:
-		body = m.projectsView(bodyHeight)
+	height := m.height - lineCount(footer)
+	var screen string
+	if height >= 8 && m.width >= 40 {
+		screen = m.screen(height)
+	} else {
+		screen = sMuted.Render("Window too small.")
 	}
-	lines := strings.Split(body, "\n")
-	if len(lines) > bodyHeight && bodyHeight > 0 {
-		lines = lines[:bodyHeight]
-	}
-	for len(lines) < bodyHeight {
+	lines := strings.Split(screen, "\n")
+	for len(lines) < height {
 		lines = append(lines, "")
 	}
-	for i := range lines {
-		lines[i] = clip(lines[i], m.width)
+	screen = strings.Join(lines[:max(0, height)], "\n")
+
+	popup := func(title, foot string, lines []string, w, h int) {
+		screen = overlay(screen, box{title: title, footer: foot, lines: lines, cursor: -1, focused: true}.render(w, h), m.width)
 	}
-	return header + "\n" + strings.Join(lines, "\n") + "\n" + footer
+	switch {
+	case m.help:
+		hl := helpLines()
+		popup("Keys", "any key closes", hl, min(m.width, 92), min(height, len(hl)+2))
+	case m.prompt != nil:
+		pl := m.prompt.lines()
+		popup(m.prompt.title, "enter save · tab next · esc cancel", pl, m.popupWidth(), len(pl)+2)
+	case m.confirm != nil:
+		cl := m.confirm.lines(m.popupWidth() - 4)
+		popup(m.confirm.question, "y yes · n no", cl, m.popupWidth(), len(cl)+2)
+	}
+	return screen + "\n" + footer
 }
+
+func (m *model) popupWidth() int { return clamp(m.width-8, 30, 72) }
 
 func lineCount(s string) int { return strings.Count(s, "\n") + 1 }
 
-func (m *model) tabs() string {
-	var parts []string
-	for i, n := range viewNames {
-		label := fmt.Sprintf("%d %s", i+1, n)
-		if view(i) == m.view {
-			parts = append(parts, sTabOn.Render(label))
-		} else {
-			parts = append(parts, sTab.Render(label))
-		}
-	}
-	left := strings.Join(parts, " ")
-	right := sMuted.Render("moco ")
-	if m.offline {
-		right = sOffline.Render("OFFLINE") + " "
-	}
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
-	}
-	return left + strings.Repeat(" ", gap) + right
-}
-
+// footer is the status line (timer, queue, connection, last message) and the key hints.
 func (m *model) footer() string {
 	var status []string
 	if t := m.timer; t != nil {
@@ -415,29 +468,25 @@ func (m *model) footer() string {
 		status = append(status, sAlarm.Render(fmt.Sprintf("%d rejected by MOCO (moco queue)", m.failed)))
 	}
 	if m.offline {
-		status = append(status, sOffline.Render("MOCO not reachable"))
+		status = append(status, sOffline.Render("OFFLINE"))
 	}
 	if m.busy > 0 {
 		status = append(status, sWarn.Render("saving…"))
 	}
-	bar := strings.Join(status, sMuted.Render(" · "))
-	if bar == "" {
-		bar = sMuted.Render("no timer running")
-	}
-
-	var line string
 	switch m.msgKind {
 	case msgOK:
-		line = sOK.Render(m.msg)
+		status = append(status, sOK.Render(m.msg))
 	case msgErr:
-		line = sErr.Render(m.msg)
+		status = append(status, sErr.Render(m.msg))
 	case msgAlarm:
-		line = sAlarm.Render(m.msg)
+		status = append(status, sAlarm.Render(m.msg))
 	default:
-		line = sMuted.Render(m.msg)
+		if m.msg != "" {
+			status = append(status, sMuted.Render(m.msg))
+		}
 	}
-	rule := sBar.Render(strings.Repeat("─", max(0, m.width)))
-	return rule + "\n" + clip(bar, m.width) + "\n" + clip(line, m.width) + "\n" + clip(m.hints(), m.width)
+	line := " " + strings.Join(status, sMuted.Render(" · "))
+	return clip(line, m.width) + "\n" + clip(" "+m.hints(), m.width)
 }
 
 func (m *model) hints() string {
@@ -446,75 +495,53 @@ func (m *model) hints() string {
 		return ""
 	case m.help:
 		return keys("any key", "close help")
-	case m.view == dayView:
-		return keys("←→", "day", "↑↓", "select", "a", "add", "e", "edit", "d", "delete", "n", "presence", "b", "break", "s", "stop", "?", "more", "q", "quit")
-	case m.view == weekView:
-		return keys("←→", "week", "↑↓", "day", "enter", "open day", "t", "this week", "?", "help", "q", "quit")
-	case m.projects.filtering:
-		return keys("type", "filter", "enter", "done", "esc", "clear")
-	case m.projects.open != nil:
-		return keys("↑↓", "select", "esc", "back", "p", "period", "/", "filter", "q", "quit")
-	default:
-		return keys("↑↓", "select", "enter", "tasks", "p", "period", "/", "filter", "r", "reload", "q", "quit")
+	case m.focus == pProjects && m.projects.filtering:
+		return keys("type", "filter", "enter", "keep", "esc", "clear")
+	case m.focus == pProjects:
+		return keys("↑↓", "project", "p/P", "period", "/", "filter", "tab", "panel", "?", "help", "q", "quit")
+	case m.focus == pPresence:
+		return keys("←→", "day", "↑↓", "select", "e", "edit", "n", "new", "s", "stop", "b", "break", "m", "merge", "o", "home/office", "d", "delete", "?", "help")
+	case m.focus == pWeek:
+		return keys("↑↓/←→", "day", "H/L", "week", "t", "today", "enter", "activities", "a", "add", "tab", "panel", "?", "help", "q", "quit")
 	}
+	return keys("←→", "day", "↑↓", "select", "a", "add", "e", "edit", "d", "delete", "T", "timer", "tab", "panel", "?", "help", "q", "quit")
 }
 
-func helpText(width int) string {
-	general := [][2]string{
-		{"General", ""},
-		{"1 2 3 / tab", "day · week · projects"},
+func helpLines() []string {
+	rows := [][2]string{
+		{"Panels", ""},
+		{"1 2 3 4 · tab", "week · presence · activities · projects"},
+		{"esc", "back to activities"},
 		{"r", "reload from MOCO"},
 		{"T", "timer: start (wizard) / stop"},
-		{"q / ctrl+c", "quit"},
-		{"", ""},
-		{"Day", ""},
-		{"← → / h l", "previous / next day"},
+		{"q · ctrl+c", "quit"},
+		{"Days", ""},
+		{"← → · h l", "previous / next day (also ↑↓ in the week panel)"},
+		{"H L · [ ]", "previous / next week"},
 		{"t", "today"},
-		{"↑ ↓ / k j", "select a presence or activity"},
-		{"a", "add an activity (wizard)"},
-		{"e / enter", "edit the selected entry"},
-		{"d / x", "delete the selected entry"},
-		{"n", "add a presence (empty end = open)"},
-		{"s", "stop: close the open presence"},
-		{"b", "break: split the presence"},
-		{"m", "merge the presence with the next one"},
-		{"o", "toggle home office / office"},
-	}
-	other := [][2]string{
-		{"Week", ""},
-		{"← → / h l", "previous / next week"},
-		{"t", "this week"},
-		{"enter", "open the selected day"},
-		{"", ""},
+		{"Entries", ""},
+		{"a", "add an activity (wizard; Enter on the empty duration = unlogged time)"},
+		{"e · enter", "edit the selected activity or presence"},
+		{"d · x", "delete the selected activity or presence"},
+		{"n s b", "new presence (empty end = open) · stop · break"},
+		{"m", "merge the presence with the next one (removes the break)"},
+		{"o", "toggle home office / office for the whole day"},
 		{"Projects", ""},
-		{"enter / esc", "tasks / back"},
-		{"p / P", "next / previous period"},
-		{"/", "filter projects"},
-		{"", ""},
-		{"Wizard: Enter on the empty duration", ""},
-		{"takes the day's unlogged time.", ""},
+		{"p P", "next / previous period"},
+		{"/ · esc", "filter · clear filter"},
 	}
-	render := func(rows [][2]string) string {
-		var b strings.Builder
-		for _, r := range rows {
-			switch {
-			case r[0] == "":
-				b.WriteString("\n")
-			case r[1] == "" && strings.Contains(r[0], " "):
-				b.WriteString(sMuted.Render(r[0]) + "\n")
-			case r[1] == "":
-				b.WriteString(sSection.Render(r[0]) + "\n")
-			default:
-				b.WriteString("  " + pad(sKey.Render(r[0]), 14) + r[1] + "\n")
+	var lines []string
+	for _, r := range rows {
+		if r[1] == "" {
+			if len(lines) > 0 {
+				lines = append(lines, "")
 			}
+			lines = append(lines, sSection.Render(r[0]))
+			continue
 		}
-		return b.String()
+		lines = append(lines, "  "+pad(sKey.Render(r[0]), 16)+r[1])
 	}
-	left, right := render(general), render(other)
-	if width >= lipgloss.Width(left)+lipgloss.Width(right)+4 {
-		return sTitle.Render("Keys") + "\n\n" + lipgloss.JoinHorizontal(lipgloss.Top, left, "    ", right)
-	}
-	return sTitle.Render("Keys") + "\n\n" + left + "\n" + right
+	return lines
 }
 
 func plural(n int, one, many string) string {

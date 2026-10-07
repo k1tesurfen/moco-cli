@@ -17,30 +17,24 @@ var (
 	cyan    = lipgloss.Color("6")
 	grey    = lipgloss.Color("8")
 
-	sTitle    = lipgloss.NewStyle().Foreground(blue).Bold(true)
-	sSection  = lipgloss.NewStyle().Foreground(blue)
-	sTab      = lipgloss.NewStyle().Foreground(grey).Padding(0, 1)
-	sTabOn    = lipgloss.NewStyle().Foreground(blue).Bold(true).Underline(true).Padding(0, 1)
-	sCursor   = lipgloss.NewStyle().Foreground(magenta).Bold(true)
-	sSelected = lipgloss.NewStyle().Bold(true)
-	sMuted    = lipgloss.NewStyle().Foreground(grey)
-	sProject  = lipgloss.NewStyle().Foreground(cyan)
-	sOK       = lipgloss.NewStyle().Foreground(green)
-	sWarn     = lipgloss.NewStyle().Foreground(yellow)
-	sErr      = lipgloss.NewStyle().Foreground(red)
-	sAlarm    = lipgloss.NewStyle().Foreground(red).Bold(true)
-	sOffline  = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(red).Bold(true).Padding(0, 1)
-	sKey      = lipgloss.NewStyle().Foreground(magenta)
-	sBar      = lipgloss.NewStyle().Foreground(grey)
-)
+	sTitle   = lipgloss.NewStyle().Foreground(blue).Bold(true)
+	sSection = lipgloss.NewStyle().Foreground(blue)
+	sMuted   = lipgloss.NewStyle().Foreground(grey)
+	sProject = lipgloss.NewStyle().Foreground(cyan)
+	sOK      = lipgloss.NewStyle().Foreground(green)
+	sWarn    = lipgloss.NewStyle().Foreground(yellow)
+	sErr     = lipgloss.NewStyle().Foreground(red)
+	sAlarm   = lipgloss.NewStyle().Foreground(red).Bold(true)
+	sOffline = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(red).Bold(true).Padding(0, 1)
+	sKey     = lipgloss.NewStyle().Foreground(magenta)
 
-// cursor renders the selection marker for a list row.
-func cursor(on bool) string {
-	if on {
-		return sCursor.Render("❯ ")
-	}
-	return "  "
-}
+	sBorder   = lipgloss.NewStyle().Foreground(grey)
+	sBorderOn = lipgloss.NewStyle().Foreground(green)
+	sTitleOn  = lipgloss.NewStyle().Foreground(green).Bold(true)
+	sSelOn    = lipgloss.NewStyle().Background(blue).Foreground(lipgloss.Color("15")).Bold(true)
+	sSelOff   = lipgloss.NewStyle().Bold(true)
+	sToday    = lipgloss.NewStyle().Foreground(blue).Bold(true)
+)
 
 // pad right-pads s (ANSI-aware) to width w.
 func pad(s string, w int) string {

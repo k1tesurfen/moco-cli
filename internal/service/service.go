@@ -76,10 +76,11 @@ func (s *Service) Day(ctx context.Context, date time.Time) (Day, error) {
 	if err != nil {
 		return Day{}, err
 	}
-	return buildDay(ds, presences, activities, s.Now())
+	return BuildDay(ds, presences, activities, s.Now())
 }
 
-func buildDay(date string, presences []api.Presence, activities []api.Activity, now time.Time) (Day, error) {
+// BuildDay computes the totals of a day from its presences and activities at now.
+func BuildDay(date string, presences []api.Presence, activities []api.Activity, now time.Time) (Day, error) {
 	d := Day{Date: date, Presences: presences, Activities: activities}
 	sort.Slice(d.Presences, func(i, j int) bool { return d.Presences[i].From < d.Presences[j].From })
 	day, err := time.ParseInLocation(timeutil.DateLayout, date, now.Location())
