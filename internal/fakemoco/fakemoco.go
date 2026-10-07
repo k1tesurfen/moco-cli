@@ -29,6 +29,7 @@ type Server struct {
 	nextID     int64
 	presences  map[int64]*api.Presence
 	activities map[int64]*api.Activity
+	projects   map[int64]api.Project
 	Requests   []string // "METHOD /path" log
 }
 
@@ -96,6 +97,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		s.writePresence(w, r, nil)
 	case path == "/api/v1/activities" && r.Method == http.MethodGet:
 		s.listActivities(w, r)
+	case path == "/api/v1/activities" && r.Method == http.MethodPost:
+		s.writeActivity(w, r, nil)
 	default:
 		m := idPath.FindStringSubmatch(path)
 		if m == nil {
@@ -121,12 +124,21 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a, ok := s.activities[id]
-		if !ok || r.Method != http.MethodDelete {
+		if !ok {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		delete(s.activities, id)
-		json.NewEncoder(w).Encode(a)
+		switch r.Method {
+		case http.MethodGet:
+			json.NewEncoder(w).Encode(a)
+		case http.MethodPatch:
+			s.writeActivity(w, r, a)
+		case http.MethodDelete:
+			delete(s.activities, id)
+			json.NewEncoder(w).Encode(a)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}
 }
 
@@ -142,11 +154,115 @@ func (s *Server) listPresences(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out)
 }
 
+// AddProject registers a project so activities can reference it by id.
+func (s *Server) AddProject(p api.Project) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.projects == nil {
+		s.projects = map[int64]api.Project{}
+	}
+	s.projects[p.ID] = p
+}
+
+// AddActivity seeds an activity (user defaults to UserID) and returns its id.
+func (s *Server) AddActivity(a api.Activity) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextID++
+	a.ID = s.nextID
+	if a.User.ID == 0 {
+		a.User.ID = UserID
+	}
+	s.activities[a.ID] = &a
+	return a.ID
+}
+
+// Activities returns the activities of a day.
+func (s *Server) Activities(date string) []api.Activity {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []api.Activity
+	for _, a := range s.activities {
+		if a.Date == date {
+			out = append(out, *a)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// writeActivity handles POST (existing == nil) and PATCH.
+func (s *Server) writeActivity(w http.ResponseWriter, r *http.Request, existing *api.Activity) {
+	var in struct {
+		Date        *string `json:"date"`
+		ProjectID   *int64  `json:"project_id"`
+		TaskID      *int64  `json:"task_id"`
+		Seconds     *int    `json:"seconds"`
+		Description *string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		jsonError(w, http.StatusUnprocessableEntity, map[string]any{"message": "Invalid payload"})
+		return
+	}
+	a := api.Activity{User: api.UserRef{ID: UserID}}
+	if existing != nil {
+		a = *existing
+	}
+	if in.Date != nil {
+		a.Date = *in.Date
+	}
+	if in.ProjectID != nil {
+		p, ok := s.projects[*in.ProjectID]
+		if !ok {
+			jsonError(w, http.StatusUnprocessableEntity, map[string][]string{"project_id": {"ist nicht gültig"}})
+			return
+		}
+		a.Project = api.Ref{ID: p.ID, Name: p.Name}
+		a.Customer = p.Customer
+	}
+	if in.TaskID != nil {
+		a.Task = api.Ref{ID: *in.TaskID}
+	}
+	if p, ok := s.projects[a.Project.ID]; ok {
+		found := false
+		for _, t := range p.Tasks {
+			if t.ID == a.Task.ID {
+				a.Task.Name, found = t.Name, true
+			}
+		}
+		if !found {
+			jsonError(w, http.StatusUnprocessableEntity, map[string][]string{"task_id": {"ist nicht gültig"}})
+			return
+		}
+	}
+	if in.Seconds != nil {
+		a.Seconds, a.WorkedSeconds = *in.Seconds, *in.Seconds
+	}
+	if in.Description != nil {
+		a.Description = *in.Description
+	}
+	if a.Date == "" {
+		jsonError(w, http.StatusUnprocessableEntity, map[string][]string{"date": {"muss ausgefüllt werden"}})
+		return
+	}
+	now := time.Now().UTC()
+	if existing == nil {
+		s.nextID++
+		a.ID = s.nextID
+		a.CreatedAt = now
+	}
+	a.UpdatedAt = now
+	stored := a
+	s.activities[a.ID] = &stored
+	json.NewEncoder(w).Encode(stored)
+}
+
 func (s *Server) listActivities(w http.ResponseWriter, r *http.Request) {
 	from, to := r.URL.Query().Get("from"), r.URL.Query().Get("to")
 	out := []api.Activity{}
+	userID := r.URL.Query().Get("user_id")
 	for _, a := range s.activities {
-		if a.Date >= from && a.Date <= to {
+		if a.Date >= from && a.Date <= to && (userID == "" || strconv.FormatInt(a.User.ID, 10) == userID) {
 			out = append(out, *a)
 		}
 	}

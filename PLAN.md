@@ -5,7 +5,7 @@ with a personal API token. The daemon nudges via native macOS notifications; sim
 questions are answered directly in the notification, everything else is done by the user in
 their own terminal (the tool never opens terminal windows).
 
-Status: **approved** — Phases 0–2 done (2026-10-07)
+Status: **approved** — Phases 0–3 committed; wizard re-test pending (see §8)
 
 ---
 
@@ -102,7 +102,9 @@ notification at all.
 | 16:30 | "Afternoon: … missing" | logged ≥ present | same as 12:30 | |
 | 17:00 | "Finished for today?" | no open presence | **Yes, 17:00** · **Yes, now** / *Still working* | Closes open presence. *Still working* → re-ask every 30 min, until 20:00 at the latest. If a timer is running, the text says so and stopping the day also offers stopping the timer. |
 
-"Present" / "logged" are computed per half-day (before / after break).
+"Present" / "logged" are computed for the day so far: activities have no time of day in MOCO, so
+logged time cannot be split into half-days. The gap is `present until now − logged today`; at 12:30
+that is the morning, at 16:30 the whole day.
 No reaction to a notification counts as "not answered"; it is never treated as yes.
 
 ---
@@ -128,9 +130,11 @@ moco presence delete <id> [--yes]
 # activities
 moco log [alias] [duration] [description] [-p project] [-t task] [-d date]
                                           # missing parts asked via inline wizard
-moco log --gap                            # prefill duration with current half-day gap
-moco list [--today|--yesterday|--week|--date D|--from D --to D]
-moco edit <id>  /  moco delete <id>
+moco log --gap                            # duration = present − logged of the day
+moco list [-d D] [--week] [--from D --to D]
+moco edit <id> [--duration] [-m description] [-p] [-t] [-d]   # wizard without flags
+moco delete <id> [--yes]
+# edit/delete refuse activities of colleagues (the token can read them)
 
 # timer
 moco timer start [alias]                  # wizard for project+task if no alias
@@ -139,7 +143,7 @@ moco timer status
 
 # projects & aliases
 moco projects [--tasks]                   # assigned projects (cached), fuzzy filter arg
-moco alias add <name> [project/task]      # wizard if omitted
+moco alias add <name> [-p project -t task]   # wizard if omitted
 moco alias list | rm <name>
 
 # days off
@@ -160,14 +164,21 @@ Global flags: `--json` for machine-readable output on list/status commands, `--d
 Built with `charmbracelet/huh`, inline (no alternate screen):
 1. **Project** – fuzzy search, recently used first (aliases listed too).
 2. **Task** – fuzzy search over the project's active tasks, last used for this project preselected.
-3. **Duration** – prefilled with the half-day gap if > 0; rounding preview ("1h07 → 1h15").
+3. **Duration** – field starts **empty**; the day's unlogged time is shown as hint + placeholder
+   ("4h00 not logged yet · Enter takes it"); Enter on the empty field uses it. In edit mode the hint
+   is the current duration and Enter keeps it. Live rounding preview ("1h07 → 1h15").
 4. **Description** – free text, required.
 5. **Date** – default today (only shown with `-d` or an option toggle).
 6. Summary + confirm → POST. On failure, the entry goes to the queue with a loud warning.
 
+### Styling
+Wizard and TUI use only the 16 ANSI colours (blue titles/focus bar, magenta selector/cursor,
+green selection/confirm, grey hints, cyan project/task, red errors), so they follow the user's
+terminal colour scheme. Plain command output (`status`, `list`) gets the same palette in Phase 8.
+
 ### Full TUI (`moco ui`)
 Built with `bubbletea` + `lipgloss`, fullscreen:
-- **Day view** – presences and activities of the selected day, totals, gap per half-day;
+- **Day view** – presences and activities of the selected day, totals, gap of the day;
   `a` add, `e` edit, `d` delete, `←/→` previous/next day.
 - **Week view** – Mon–Fri totals, present vs logged, gaps highlighted; `enter` jumps to the day.
 - **Projects** – assigned projects → tasks → my hours on them for a selectable period.
@@ -186,7 +197,7 @@ moco-cli/
 │   ├── config/       # config.toml load/save, defaults
 │   ├── secrets/      # Keychain access (go-keychain or `security` CLI)
 │   ├── store/        # local state: cache (projects, me), recents, aliases, pauses, queue, daemon state
-│   ├── timeutil/     # duration parsing, rounding, half-day math, workday logic
+│   ├── timeutil/     # duration parsing, rounding, gap math, workday logic
 │   ├── service/      # domain logic: start/break/stop, gap calculation, logging, timer, queue sync
 │   ├── cli/          # cobra commands
 │   ├── wizard/       # huh-based inline flows
@@ -269,7 +280,7 @@ review = { project = "ACME Website", task = "Project management" }
 8. **TUI** – day view, week view, project browser, presence editing.
 9. **Polish** – `--json`, README, shell completions.
 
-Testing: unit tests for duration parsing, rounding, half-day/gap math, reminder rule evaluation
+Testing: unit tests for duration parsing, rounding, gap math, reminder rule evaluation
 (with a fake clock and a fake MOCO state); API client tested against `httptest` fixtures shaped
 after the OpenAPI spec. No automated tests ever write to the real MOCO account.
 
@@ -290,3 +301,23 @@ after the OpenAPI spec. No automated tests ever write to the real MOCO account.
   of macOS 26, so it also runs after the planned update to macOS 27 (Darwin 26). Only stable
   `UserNotifications` APIs are used. If the update breaks anything (e.g. notification permissions,
   LaunchAgent behaviour), it gets fixed after the update.
+
+---
+
+## 8. Progress log
+
+**2026-10-07/08**
+- Phases 0–2 done and committed (`48562fa`, `c377caa`).
+- Phase 3 (activities: `log`, `list`, `edit`, `delete`, `alias`, wizard) verified against MOCO
+  with one-liners on the sandbox day, committed (`Phase 3: …`).
+- User tested the wizard → feedback applied: empty duration field with hint, ANSI-colour theme.
+  Waiting for the user's re-test of the wizard.
+- Write tests run on the sandbox day **2026-10-06** with project "Intern – nicht verrechenbar" only,
+  always cleaned up. Note: from 2026-10-08 on, `-d y` no longer points at the sandbox day — use the date.
+- **Open:** 2026-10-06 still holds the user's wizard-test data: presence 08:00–12:00, activity
+  "Internes Meeting. Besprechungen." (2h, Intern / Strategie), alias `test`. Ask whether the meeting
+  is real before cleaning up.
+- **Open for Phase 5:** does an activity's `seconds` include a running timer segment? (`status`
+  currently assumes not.)
+
+Next: Phase 4 (offline queue).

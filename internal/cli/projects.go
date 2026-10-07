@@ -3,12 +3,11 @@ package cli
 import (
 	"fmt"
 	"os"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
-	"github.com/k1tesurfen/moco-cli/internal/api"
+	"github.com/k1tesurfen/moco-cli/internal/service"
 )
 
 func projectsCmd() *cobra.Command {
@@ -27,7 +26,7 @@ func projectsCmd() *cobra.Command {
 				return err
 			}
 			if len(args) == 1 {
-				projects = filterProjects(projects, args[0])
+				projects = service.FindProjects(projects, args[0])
 			}
 			if flags.json {
 				return printJSON(projects)
@@ -53,24 +52,4 @@ func projectsCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&withTasks, "tasks", false, "also list each project's active tasks")
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "reload from MOCO instead of the cache")
 	return cmd
-}
-
-// filterProjects keeps projects whose name, customer or identifier contain every word of the filter.
-func filterProjects(projects []api.Project, filter string) []api.Project {
-	words := strings.Fields(strings.ToLower(filter))
-	var out []api.Project
-	for _, p := range projects {
-		hay := strings.ToLower(p.Name + " " + p.Customer.Name + " " + p.Identifier)
-		ok := true
-		for _, w := range words {
-			if !strings.Contains(hay, w) {
-				ok = false
-				break
-			}
-		}
-		if ok {
-			out = append(out, p)
-		}
-	}
-	return out
 }

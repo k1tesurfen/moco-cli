@@ -68,3 +68,52 @@ func TestWorkdayAndLocation(t *testing.T) {
 		t.Error("location defaults wrong")
 	}
 }
+
+func TestAliases(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := SetSubdomain("x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAlias("intern", Alias{Project: `Intern – "nicht" verrechenbar`, Task: "Programmierung"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAlias("seo", Alias{Project: "Website", Task: "SEO"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAlias("intern", Alias{Project: "Intern", Task: "Konzept"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Aliases) != 2 || cfg.Aliases["intern"].Task != "Konzept" || cfg.Aliases["seo"].Project != "Website" {
+		t.Errorf("aliases = %+v", cfg.Aliases)
+	}
+	if err := RemoveAlias("seo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveAlias("seo"); err == nil {
+		t.Error("removing a missing alias should fail")
+	}
+	data, _ := os.ReadFile(Path())
+	if !strings.Contains(string(data), "# review =") || strings.Contains(string(data), "seo") {
+		t.Errorf("file:\n%s", data)
+	}
+	if err := SetAlias("Bad Name", Alias{}); err == nil {
+		t.Error("expected invalid name error")
+	}
+}
+
+func TestAliasesSectionMissing(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	os.MkdirAll(Dir(), 0o755)
+	os.WriteFile(Path(), []byte("subdomain = \"x\"\n"), 0o644)
+	if err := SetAlias("a", Alias{Project: "P", Task: "T"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil || cfg.Aliases["a"].Task != "T" {
+		t.Errorf("cfg = %+v, %v", cfg.Aliases, err)
+	}
+}

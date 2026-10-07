@@ -302,7 +302,10 @@ func printDay(ctx context.Context, svc *service.Service, d time.Time) error {
 	}
 	summary := timeutil.FormatSeconds(total) + " present"
 	if openPast {
-		summary += " + an open presence — close it with `moco stop HH:MM -d " + timeutil.Date(d) + "`"
+		summary = "not finished — close it with `moco stop HH:MM -d " + timeutil.Date(d) + "`"
+		if total > 0 {
+			summary = timeutil.FormatSeconds(total) + " present, " + summary
+		}
 	}
 	fmt.Printf("%s: %s (%s) · %s\n", d.Format("Mon 2 Jan"), strings.Join(spans, ", "), where(home), summary)
 	return nil

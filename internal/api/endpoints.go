@@ -89,3 +89,10 @@ func rangeQuery(userID int64, from, to string) url.Values {
 }
 
 func itoa(id int64) string { return strconv.FormatInt(id, 10) }
+
+// Activity returns a single activity.
+func (c *Client) Activity(ctx context.Context, id int64) (Activity, error) {
+	var a Activity
+	_, err := c.do(ctx, http.MethodGet, c.url("/activities/"+itoa(id), nil), nil, &a)
+	return a, err
+}

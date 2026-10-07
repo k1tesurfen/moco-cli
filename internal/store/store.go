@@ -21,6 +21,31 @@ type State struct {
 	Me *Me `json:"me,omitempty"`
 	// Projects is the cache of GET /projects/assigned.
 	Projects *ProjectCache `json:"projects,omitempty"`
+	// Recent holds recently used project/task pairs, most recent first.
+	Recent []Recent `json:"recent,omitempty"`
+}
+
+// Recent is one recently used project/task pair.
+type Recent struct {
+	ProjectID int64     `json:"project_id"`
+	TaskID    int64     `json:"task_id"`
+	UsedAt    time.Time `json:"used_at"`
+}
+
+const maxRecent = 30
+
+// AddRecent moves the pair to the front of the recent list.
+func (s *State) AddRecent(projectID, taskID int64, at time.Time) {
+	out := []Recent{{ProjectID: projectID, TaskID: taskID, UsedAt: at}}
+	for _, r := range s.Recent {
+		if r.ProjectID != projectID || r.TaskID != taskID {
+			out = append(out, r)
+		}
+	}
+	if len(out) > maxRecent {
+		out = out[:maxRecent]
+	}
+	s.Recent = out
 }
 
 // Me identifies the logged-in user.
