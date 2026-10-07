@@ -5,7 +5,7 @@ with a personal API token. The daemon nudges via native macOS notifications; sim
 questions are answered directly in the notification, everything else is done by the user in
 their own terminal (the tool never opens terminal windows).
 
-Status: **approved** — Phases 0–4 committed
+Status: **approved** — Phases 0–5 committed
 
 ---
 
@@ -85,7 +85,14 @@ Break model: a day with a break = two presences (`08:00–13:00`, `14:00–17:00
 | `start_timer` on a past day → `422 {"base":["Timer can only be started on the current day"]}` | Timer only for today. |
 | `presences/touch`: `override` is a **boolean**, not a timestamp; acts on "now" | `touch` is not used; start/stop use explicit `POST`/`PATCH`. |
 
-Still open: `start_timer` / `stop_timer` on today (whether `seconds` includes the running segment) — Phase 5.
+### Timer probe results (2026-10-08, on today with explicit OK, project "Intern", cleaned up)
+
+| Finding | Consequence |
+|---|---|
+| **Creating a 0-second activity for today starts its timer by itself**; an explicit `start_timer` then answers `422 Timer is already running` | `timer start` only calls `start_timer` if the created activity isn't running yet. |
+| **A starting timer opens a presence** (at the current minute) if the day has none open; stopping the timer leaves it open | `timer start` prints the open presence; the daemon's 08:00 check sees it as "started". |
+| While running, `seconds`/`worked_seconds` stay unchanged (0); `timer_started_at` is set | Running time = `seconds + now − timer_started_at` (`service.TimerSeconds`). |
+| `stop_timer` writes the tracked time (whole minutes) into `seconds` | Rounded up afterwards with a `PATCH`, minimum one rounding step. |
 
 ---
 
@@ -288,10 +295,11 @@ after the OpenAPI spec. No automated tests ever write to the real MOCO account.
 
 ## 7. Assumptions to confirm on review
 
-- Timer implementation: `moco timer start` creates an activity for today with `seconds=0` and a placeholder
-  description, then calls `start_timer`; `moco timer stop` calls `stop_timer`, rounds the result up, asks
-  for the description and `PUT`s it. Starting a timer while one is running stops the old one first
-  (asking its description).
+- Timer implementation (done in Phase 5): `moco timer start` creates an activity for today with
+  `seconds=0` and a placeholder description (MOCO starts the timer itself); `moco timer stop` asks for
+  the description, calls `stop_timer`, rounds up (at least one step) and `PATCH`es. Starting a timer
+  while one is running stops the old one first (asking its description). `moco timer cancel` discards
+  a timer and its activity.
 - A timer running across the break is left alone; the 14:00 break prompt only mentions it.
 - `moco stop` with a running timer asks whether to stop the timer too.
 - Activities with no presence on that day are allowed (MOCO allows it); `moco status` warns.
@@ -339,4 +347,17 @@ after the OpenAPI spec. No automated tests ever write to the real MOCO account.
   queued start/break/stop/log, auto-sync on the next command, duplicate start skipped, impossible
   stop kept as FAILED, dropped; sandbox cleaned up.
 
-Next: Phase 5 (timer).
+**2026-10-08 — Phase 5 (timer)**
+- `moco timer start [alias] [description…]` (`-p/-t`, wizard otherwise), `timer stop [description…]`
+  (asks with a prompt, prefilled if the entry already has one), `timer status`, `timer cancel`.
+- A running timer is found over the last 7 days (catches a forgotten one). Durations in `list`/
+  `status` include the running segment; the placeholder shows as "(no description yet)".
+- `moco stop` (today) asks whether to stop a running timer too; without a terminal it only warns.
+- Timer start/stop are not queued (they must be live). If `stop_timer` works but saving the rounded
+  time/description doesn't reach MOCO, that update is queued (`edit` queue item).
+- If `start_timer` fails, the freshly created empty activity is deleted again.
+- Verified on today with OK: start, status, stop (5 min → 0h15), start with description, cancel;
+  probe activity and the auto-opened presence deleted, today empty as before.
+- Not tested live: the `moco stop` timer question (needs a terminal) — for the user to try.
+
+Next: Phase 6 (notifier app).

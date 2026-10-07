@@ -78,11 +78,8 @@ func statusCmd() *cobra.Command {
 				fmt.Println()
 				w = tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 				for _, a := range day.Activities {
-					desc := a.Description
-					if a.TimerRunning() {
-						desc = "⏱ " + desc
-					}
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", timeutil.FormatSeconds(a.Seconds), a.Project.Name, a.Task.Name, oneLine(desc, 60))
+					sec, desc := shownActivity(a, now, 60)
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", timeutil.FormatSeconds(sec), a.Project.Name, a.Task.Name, desc)
 				}
 				w.Flush()
 			}

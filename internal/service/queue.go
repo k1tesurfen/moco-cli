@@ -210,6 +210,15 @@ func (s *Service) replayOne(ctx context.Context, q store.QueueItem, claimed map[
 		}
 		return err
 
+	case store.KindEdit:
+		in := api.ActivityInput{Description: q.Description}
+		if q.Seconds > 0 {
+			sec := q.Seconds
+			in.Seconds = &sec
+		}
+		_, err := s.API.UpdateActivity(ctx, q.ActivityID, in)
+		return err
+
 	case store.KindStart:
 		ps, err := s.dayPresences(ctx, date)
 		if err != nil {

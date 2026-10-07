@@ -32,6 +32,11 @@ type Server struct {
 	projects   map[int64]api.Project
 	Requests   []string // "METHOD /path" log
 
+	// Now is the fake's clock (timers, created_at); defaults to time.Now.
+	Now func() time.Time
+	// Fail, if set, can answer a request with an error status instead (0 = handle normally).
+	Fail func(r *http.Request) int
+
 	down       int  // if non-zero, every request is answered with this status
 	failWrites int  // if non-zero, every non-GET request is answered with this status
 	dropReply  bool // process the next write but answer 502, like a connection lost after sending
@@ -67,7 +72,7 @@ func (lostReply) WriteHeader(int)             {}
 // New starts a fake MOCO that is closed when the test ends.
 func New(t *testing.T) *Server {
 	t.Helper()
-	s := &Server{nextID: 100, presences: map[int64]*api.Presence{}, activities: map[int64]*api.Activity{}}
+	s := &Server{nextID: 100, presences: map[int64]*api.Presence{}, activities: map[int64]*api.Activity{}, Now: time.Now}
 	srv := httptest.NewServer(http.HandlerFunc(s.handle))
 	t.Cleanup(srv.Close)
 	s.URL = srv.URL + "/api/v1"
@@ -105,7 +110,7 @@ func (s *Server) Presences(date string) []api.Presence {
 
 var (
 	hhmm      = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
-	idPath    = regexp.MustCompile(`^/api/v1/(users/presences|activities)/(\d+)$`)
+	idPath    = regexp.MustCompile(`^/api/v1/(users/presences|activities)/(\d+)(/start_timer|/stop_timer)?$`)
 	jsonError = func(w http.ResponseWriter, status int, body any) {
 		w.WriteHeader(status)
 		json.NewEncoder(w).Encode(body)
@@ -121,6 +126,12 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	if s.down != 0 {
 		w.WriteHeader(s.down)
 		return
+	}
+	if s.Fail != nil {
+		if status := s.Fail(r); status != 0 {
+			w.WriteHeader(status)
+			return
+		}
 	}
 	if r.Method != http.MethodGet {
 		if s.failWrites != 0 {
@@ -152,6 +163,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		id, _ := strconv.ParseInt(m[2], 10, 64)
+		if m[3] != "" {
+			s.timer(w, r, id, m[3] == "/start_timer")
+			return
+		}
 		if m[1] == "users/presences" {
 			p, ok := s.presences[id]
 			if !ok {
@@ -198,6 +213,48 @@ func (s *Server) listPresences(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Date+out[i].From < out[j].Date+out[j].From })
 	json.NewEncoder(w).Encode(out)
+}
+
+// timer handles PATCH /activities/{id}/start_timer and stop_timer. Like the real MOCO, a timer
+// only starts on today's activities; stopping adds the running segment to seconds.
+func (s *Server) timer(w http.ResponseWriter, r *http.Request, id int64, start bool) {
+	a, ok := s.activities[id]
+	if !ok || r.Method != http.MethodPatch {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	now := s.Now().UTC()
+	switch {
+	case start && a.Date != s.Now().Format("2006-01-02"):
+		jsonError(w, http.StatusUnprocessableEntity, map[string][]string{"base": {"Timer can only be started on the current day"}})
+		return
+	case start && a.TimerRunning(), !start && !a.TimerRunning():
+		jsonError(w, http.StatusUnprocessableEntity, map[string][]string{"base": {"Timer state is invalid"}})
+		return
+	case start:
+		a.TimerStartedAt = &now
+		s.openPresenceForTimer(a.Date)
+	default:
+		a.Seconds += int(now.Sub(*a.TimerStartedAt).Seconds())
+		a.WorkedSeconds = a.Seconds
+		a.TimerStartedAt = nil
+	}
+	a.UpdatedAt = now
+	json.NewEncoder(w).Encode(a)
+}
+
+// openPresenceForTimer mimics MOCO opening a presence (at the current minute) when a timer
+// starts and the day has no open presence.
+func (s *Server) openPresenceForTimer(date string) {
+	for _, p := range s.presences {
+		if p.Date == date && p.To == "" {
+			return
+		}
+	}
+	s.nextID++
+	now := s.Now()
+	s.presences[s.nextID] = &api.Presence{ID: s.nextID, Date: date, From: now.Format("15:04"),
+		IsHomeOffice: s.dayHome(date, 0), CreatedAt: now.UTC(), UpdatedAt: now.UTC()}
 }
 
 // AddProject registers a project so activities can reference it by id.
@@ -291,11 +348,15 @@ func (s *Server) writeActivity(w http.ResponseWriter, r *http.Request, existing 
 		jsonError(w, http.StatusUnprocessableEntity, map[string][]string{"date": {"muss ausgefüllt werden"}})
 		return
 	}
-	now := time.Now().UTC()
+	now := s.Now().UTC()
 	if existing == nil {
 		s.nextID++
 		a.ID = s.nextID
 		a.CreatedAt = now
+		if a.Seconds == 0 && a.Date == s.Now().Format("2006-01-02") {
+			a.TimerStartedAt = &now // real MOCO starts the timer on a new empty entry for today
+			s.openPresenceForTimer(a.Date)
+		}
 	}
 	a.UpdatedAt = now
 	stored := a

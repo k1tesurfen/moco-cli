@@ -255,16 +255,13 @@ func listCmd() *cobra.Command {
 			total := 0
 			perDay := map[string]int{}
 			for _, a := range acts {
-				total += a.Seconds
-				perDay[a.Date] += a.Seconds
-				desc := oneLine(a.Description, 50)
-				if a.TimerRunning() {
-					desc = "⏱ " + desc
-				}
+				sec, desc := shownActivity(a, svc.Now(), 50)
+				total += sec
+				perDay[a.Date] += sec
 				if multiDay {
-					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", a.ID, a.Date, timeutil.FormatSeconds(a.Seconds), oneLine(a.Project.Name, 30), a.Task.Name, desc)
+					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", a.ID, a.Date, timeutil.FormatSeconds(sec), oneLine(a.Project.Name, 30), a.Task.Name, desc)
 				} else {
-					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", a.ID, timeutil.FormatSeconds(a.Seconds), oneLine(a.Project.Name, 30), a.Task.Name, desc)
+					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", a.ID, timeutil.FormatSeconds(sec), oneLine(a.Project.Name, 30), a.Task.Name, desc)
 				}
 			}
 			w.Flush()
@@ -467,4 +464,17 @@ func deleteCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "don't ask for confirmation")
 	return cmd
+}
+
+// shownActivity returns the duration and description to display: a running timer counts until
+// now and is marked with ⏱; the timer placeholder is not shown as a description.
+func shownActivity(a api.Activity, now time.Time, max int) (int, string) {
+	desc := oneLine(a.Description, max)
+	if !service.HasDescription(a) {
+		desc = "(no description yet)"
+	}
+	if a.TimerRunning() {
+		desc = "⏱ " + desc
+	}
+	return service.TimerSeconds(a, now), desc
 }

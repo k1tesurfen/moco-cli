@@ -98,11 +98,9 @@ func buildDay(date string, presences []api.Presence, activities []api.Activity, 
 	}
 	for i := range d.Activities {
 		a := &d.Activities[i]
-		d.LoggedSeconds += a.Seconds
+		d.LoggedSeconds += TimerSeconds(*a, now)
 		if a.TimerRunning() {
-			// Assumes `seconds` excludes the running segment; verify in Phase 5 (timer).
 			d.RunningTimer = a
-			d.LoggedSeconds += int(now.Sub(*a.TimerStartedAt).Seconds())
 		}
 	}
 	return d, nil

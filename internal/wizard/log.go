@@ -280,3 +280,23 @@ func mapErr(err error) error {
 	}
 	return err
 }
+
+// AskDescription asks for a required description; initial is prefilled.
+func AskDescription(ctx context.Context, title, hint, initial string) (string, error) {
+	desc := initial
+	in := huh.NewInput().
+		Title(title).
+		Description(hint).
+		Value(&desc).
+		CharLimit(2000).
+		Validate(func(s string) error {
+			if strings.TrimSpace(s) == "" {
+				return errors.New("a description is required")
+			}
+			return nil
+		})
+	if err := run(ctx, in); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(desc), nil
+}

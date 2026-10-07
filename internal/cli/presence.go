@@ -101,6 +101,11 @@ func stopCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if timeutil.Date(d) == timeutil.Date(svc.Now()) {
+			if err := offerTimerStop(cmd.Context(), svc); err != nil {
+				return err
+			}
+		}
 		p, err := svc.Stop(cmd.Context(), d, to)
 		if queued(err) {
 			return nil
@@ -339,4 +344,22 @@ func orDots(s string) string {
 		return "…"
 	}
 	return s
+}
+
+// offerTimerStop asks whether a running timer should be stopped along with the day.
+func offerTimerStop(ctx context.Context, svc *service.Service) error {
+	running, err := svc.RunningTimer(ctx)
+	if err != nil || running == nil {
+		return nil // the presence stop itself reports connection problems
+	}
+	what := fmt.Sprintf("A timer is running on %s / %s (%s).", running.Project.Name, running.Task.Name,
+		timeutil.FormatSeconds(service.TimerSeconds(*running, svc.Now())))
+	if !isTTY() {
+		fmt.Fprintln(os.Stderr, "Note:", what, "It keeps running — `moco timer stop`.")
+		return nil
+	}
+	if !confirm(what + " Stop it too?") {
+		return nil
+	}
+	return stopTimer(ctx, svc, *running, "")
 }

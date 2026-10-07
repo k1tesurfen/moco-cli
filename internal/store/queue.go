@@ -13,6 +13,7 @@ const (
 	KindStop     = "stop"     // close the open presence at To
 	KindBreak    = "break"    // split the presence covering From–To
 	KindPresence = "presence" // create the closed or open presence From–To (rest of a half-done break)
+	KindEdit     = "edit"     // set Seconds and/or Description of activity ActivityID (stopped timer)
 )
 
 // QueueItem is one write waiting for MOCO.
@@ -29,6 +30,9 @@ type QueueItem struct {
 	TaskName    string `json:"task_name,omitempty"`
 	Seconds     int    `json:"seconds,omitempty"` // already rounded
 	Description string `json:"description,omitempty"`
+
+	// edit
+	ActivityID int64 `json:"activity_id,omitempty"`
 
 	// presences ("HH:MM", already normalized)
 	From string `json:"from,omitempty"`
@@ -52,6 +56,16 @@ func (q QueueItem) Summary() string {
 	case KindLog:
 		m := q.Seconds / 60
 		return fmt.Sprintf("log %dh%02d · %s / %s · %s · %q", m/60, m%60, q.ProjectName, q.TaskName, q.Date, q.Description)
+	case KindEdit:
+		s := fmt.Sprintf("finish timer entry %d · %s / %s · %s", q.ActivityID, q.ProjectName, q.TaskName, q.Date)
+		if q.Seconds > 0 {
+			m := q.Seconds / 60
+			s += fmt.Sprintf(" · %dh%02d", m/60, m%60)
+		}
+		if q.Description != "" {
+			s += fmt.Sprintf(" · %q", q.Description)
+		}
+		return s
 	case KindStart:
 		s := fmt.Sprintf("start %s · %s", q.From, q.Date)
 		if q.Home != nil {
