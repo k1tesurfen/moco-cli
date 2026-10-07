@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The delegate must be in place before launch finishes: a click on a notification can be
         // what launched the app.
         let n = Notifier(server: server)
-        server.onCommand = { n.handle($0) }
+        server.onCommand = { n.handle($0, from: $1) }
         notifier = n
     }
 

@@ -77,10 +77,20 @@ func notifierCmd() *cobra.Command {
 				return err
 			}
 			fmt.Println("Notification shown — answer it (waiting up to 2 minutes) …")
-			select {
-			case r, ok := <-c.Responses:
+			for {
+				var r notify.Response
+				var ok bool
+				select {
+				case r, ok = <-c.Responses:
+				case <-ctx.Done():
+					c.Remove(n.ID)
+					return fmt.Errorf("no answer within 2 minutes")
+				}
 				if !ok {
 					return fmt.Errorf("the notifier closed the connection")
+				}
+				if r.ID != n.ID {
+					continue // an answer to the daemon's notifications
 				}
 				switch {
 				case r.Dismissed:
@@ -91,9 +101,6 @@ func notifierCmd() *cobra.Command {
 					fmt.Printf("Answer: %s\n", r.Action)
 				}
 				return nil
-			case <-ctx.Done():
-				c.Remove(n.ID)
-				return fmt.Errorf("no answer within 2 minutes")
 			}
 		},
 	}, &cobra.Command{

@@ -107,3 +107,32 @@ func ParseDate(s string, now time.Time) (time.Time, error) {
 	}
 	return d, nil
 }
+
+// ParseFutureDate is ParseDate looking forward: "today", "tomorrow", "+N" (days ahead), weekday
+// names (the next such day, today included) and YYYY-MM-DD.
+func ParseFutureDate(s string, now time.Time) (time.Time, error) {
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "", "today", "t":
+		return today, nil
+	case "tomorrow":
+		return today.AddDate(0, 0, 1), nil
+	}
+	if strings.HasPrefix(s, "+") {
+		if n, err := strconv.Atoi(s[1:]); err == nil && n >= 0 {
+			return today.AddDate(0, 0, n), nil
+		}
+	}
+	for wd := time.Sunday; wd <= time.Saturday; wd++ {
+		name := strings.ToLower(wd.String())
+		if s == name || s == name[:3] {
+			return today.AddDate(0, 0, (int(wd)-int(today.Weekday())+7)%7), nil
+		}
+	}
+	d, err := time.ParseInLocation(DateLayout, s, now.Location())
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid date %q, expected YYYY-MM-DD, today, tomorrow, +N or a weekday", s)
+	}
+	return d, nil
+}

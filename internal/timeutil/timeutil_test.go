@@ -63,3 +63,19 @@ func TestParseDate(t *testing.T) {
 		t.Error("expected error")
 	}
 }
+
+func TestParseFutureDate(t *testing.T) {
+	now := time.Date(2026, 10, 8, 15, 0, 0, 0, time.UTC) // Thursday
+	for in, want := range map[string]string{
+		"today": "2026-10-08", "tomorrow": "2026-10-09", "+3": "2026-10-11",
+		"thu": "2026-10-08", "fri": "2026-10-09", "monday": "2026-10-12", "2026-12-24": "2026-12-24",
+	} {
+		got, err := ParseFutureDate(in, now)
+		if err != nil || Date(got) != want {
+			t.Errorf("%s: %s %v, want %s", in, Date(got), err, want)
+		}
+	}
+	if _, err := ParseFutureDate("next week", now); err == nil {
+		t.Error("want error")
+	}
+}

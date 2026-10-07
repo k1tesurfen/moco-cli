@@ -86,7 +86,8 @@ type Client struct {
 	pongs     chan Status
 	delivered map[string]chan error
 
-	// Responses receives the user's answers. It is closed when the connection ends.
+	// Responses receives the user's answers to all notifications (every client gets them;
+	// ignore ids you don't own). It is closed when the connection ends.
 	Responses <-chan Response
 	responses chan Response
 	// Errors receives errors the helper reports that belong to no pending request.

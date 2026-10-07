@@ -30,6 +30,7 @@ install: build
 	@pkill -x MocoNotifier || true
 	rm -rf $(APPDIR)/MocoNotifier.app
 	cp -R $(APP) $(APPDIR)/
+	@launchctl kickstart -k gui/$$(id -u)/de.artismedia.moco.daemon 2>/dev/null && echo "Restarted the daemon" || true
 	@echo "Installed $(PREFIX)/bin/moco and $(APPDIR)/MocoNotifier.app"
 
 uninstall:

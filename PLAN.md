@@ -5,7 +5,7 @@ with a personal API token. The daemon nudges via native macOS notifications; sim
 questions are answered directly in the notification, everything else is done by the user in
 their own terminal (the tool never opens terminal windows).
 
-Status: **approved** — Phases 0–6 committed
+Status: **approved** — Phases 0–7 committed
 
 ---
 
@@ -222,13 +222,14 @@ moco-cli/
 - Needs to be an `.app` bundle with its own bundle id (`de.artismedia.moco-notifier` or similar),
   ad-hoc signed; the user grants notification permission once on first launch.
 - Launched by the daemon as a background agent app (`LSUIElement`, no Dock icon) and kept running.
-- IPC: Unix domain socket at `~/.local/state/moco/notifier.sock` (helper listens, one client),
+- IPC: Unix domain socket at `~/.local/state/moco/notifier.sock` (helper listens, several clients:
+  the daemon plus short-lived CLI checks; replies go to the asking client, user answers to all),
   newline-delimited JSON, every message has a `type`:
   daemon → helper: `ping`, `notify {id,category,title,subtitle?,body,actions[{id,title,input?,placeholder?,button?}],sound?}`,
   `remove {ids}`, `quit`;
   helper → daemon: `pong {version,authorization}`, `delivered {id}`, `error {id?,message}`,
   `response {id,action,text?}` (`action:"default"` = notification clicked) or `response {id,dismissed:true}`.
-  Answers given while no daemon is connected are kept (up to 100) and sent to the next client.
+  Answers given while no client is connected are kept (up to 100) and sent to the next one.
 - Each distinct action set becomes its own notification category (stable FNV id); the helper waits
   for the category registration before posting, so buttons are never missing.
 - The Go side (`internal/notify`) launches the helper with `open -g -a … --args --socket …` if
@@ -384,4 +385,28 @@ after the OpenAPI spec. No automated tests ever write to the real MOCO account.
   quick to scan. The §3 "primary / Options" split becomes just an ordering.
 - Note: an old `alias moco=…python…` in the user's `~/.zshrc` shadowed the binary (user removes it).
 
-Next: Phase 7 (daemon).
+**2026-10-08 — Phase 7 (daemon)**
+- `internal/daemon`: `rules.go` (pure: schedule, relevance check against MOCO, pick, re-ask
+  policy), `messages.go` (texts + action ids), `answers.go` (answer → plan: description, MOCO
+  write via `service`, state effect), `daemon.go` (30 s loop, notifier connection, answers).
+- **Catch-up:** of all due reminders only the latest *still relevant* one is shown; the others are
+  closed as missed (e.g. waking at 13:30 without a presence → only the start question).
+- **Relevance:** start = no presence; log reminders = presence and gap ≥ one rounding step;
+  break = exactly one presence, open, begun before `break_from`; end = open presence.
+  MOCO unreachable → only the start question is asked (its answer is queued), the rest waits.
+- Shown questions are rechecked every 5 min; settled elsewhere → notification removed.
+- Answers: click on the notification / dismiss = not answered (asked again as scheduled);
+  bad input or MOCO error → error notification and the question returns on the next tick;
+  queued → "Queued" notification. Late answers for an earlier day still write to that day.
+- Offline queue synced every 5 min by the daemon; rejected entries get a notification.
+- Start options also offer the other location; "Other time…" accepts `8:15 home`.
+- `moco daemon install|uninstall|start|stop|status|logs|test <event>` — LaunchAgent
+  `de.artismedia.moco.daemon` (RunAtLoad, KeepAlive), log `~/Library/Logs/moco/daemon.log`,
+  pid file for `test` (SIGUSR1). **`test` is a dry run**: answers are described, nothing is written.
+- `moco pause today|<date>|until <date>|list|clear <date>` (forward date parsing: weekday = next one).
+- Notifier changed to several clients (replies to the asker, answers broadcast) — a CLI check no
+  longer disconnects the daemon. `make install` restarts a running daemon.
+- Verified live: LaunchAgent installed and running, notifier connected, dry-run start/end tests
+  answered by the user (option, click) with result notifications. Daemon left running.
+
+Next: Phase 8 (TUI).

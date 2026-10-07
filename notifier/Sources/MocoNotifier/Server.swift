@@ -1,14 +1,15 @@
 import Foundation
 
-/// A Unix socket server for one client at a time (the daemon). Events sent while no client is
-/// connected are kept and delivered to the next one, so a click is not lost when the daemon
-/// restarts.
+/// A Unix socket server. Replies (pong, delivered, error) go to the client that asked; the user's
+/// answers go to every connected client — each ignores ids it doesn't own. Answers given while no
+/// client is connected are kept and delivered to the next one, so a click is not lost when the
+/// daemon restarts.
 final class Server {
     let path: String
-    var onCommand: (Command) -> Void = { _ in }
+    var onCommand: (Command, Int32) -> Void = { _, _ in }
 
     private let lock = NSLock()
-    private var client: Int32 = -1
+    private var clients = Set<Int32>()
     private var backlog: [Data] = []
     private let maxBacklog = 100
 
@@ -40,22 +41,38 @@ final class Server {
         }
         guard rc == 0 else { throw posixError("bind \(path)") }
         chmod(path, 0o600)
-        guard listen(fd, 4) == 0 else { throw posixError("listen") }
+        guard listen(fd, 8) == 0 else { throw posixError("listen") }
 
         let thread = Thread { [weak self] in self?.acceptLoop(fd) }
-        thread.name = "socket"
+        thread.name = "accept"
         thread.start()
     }
 
-    /// Sends an event to the connected client, or keeps it for the next one.
-    func send(_ event: Event) {
-        guard var data = try? JSONEncoder().encode(event) else { return }
-        data.append(0x0A)
+    /// Sends a reply to one client.
+    func send(_ event: Event, to fd: Int32) {
+        guard let data = encode(event) else { return }
         lock.lock()
         defer { lock.unlock() }
-        if client >= 0, writeAll(client, data) { return }
-        backlog.append(data)
-        if backlog.count > maxBacklog { backlog.removeFirst(backlog.count - maxBacklog) }
+        if clients.contains(fd) { _ = writeAll(fd, data) }
+    }
+
+    /// Sends a user's answer to every client, or keeps it for the next one.
+    func broadcast(_ event: Event) {
+        guard let data = encode(event) else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        var delivered = false
+        for fd in clients where writeAll(fd, data) { delivered = true }
+        if !delivered {
+            backlog.append(data)
+            if backlog.count > maxBacklog { backlog.removeFirst(backlog.count - maxBacklog) }
+        }
+    }
+
+    private func encode(_ event: Event) -> Data? {
+        guard var data = try? JSONEncoder().encode(event) else { return nil }
+        data.append(0x0A)
+        return data
     }
 
     private func acceptLoop(_ listener: Int32) {
@@ -63,21 +80,27 @@ final class Server {
             let fd = accept(listener, nil, nil)
             if fd < 0 { continue }
             lock.lock()
-            if client >= 0 { close(client) } // a new daemon replaces the old connection
-            client = fd
+            clients.insert(fd)
             var pending = backlog
             backlog.removeAll()
             while !pending.isEmpty, writeAll(fd, pending[0]) { pending.removeFirst() }
             backlog = pending
             lock.unlock()
 
-            readLoop(fd)
-
-            lock.lock()
-            if client == fd { client = -1 }
-            lock.unlock()
-            close(fd)
+            let thread = Thread { [weak self] in
+                self?.readLoop(fd)
+                self?.drop(fd)
+            }
+            thread.name = "client \(fd)"
+            thread.start()
         }
+    }
+
+    private func drop(_ fd: Int32) {
+        lock.lock()
+        clients.remove(fd)
+        lock.unlock()
+        close(fd)
     }
 
     private func readLoop(_ fd: Int32) {
@@ -93,9 +116,9 @@ final class Server {
                 if line.isEmpty { continue }
                 do {
                     let cmd = try JSONDecoder().decode(Command.self, from: line)
-                    DispatchQueue.main.async { self.onCommand(cmd) }
+                    DispatchQueue.main.async { self.onCommand(cmd, fd) }
                 } catch {
-                    send(Event(type: "error", message: "invalid command: \(error.localizedDescription)"))
+                    send(Event(type: "error", message: "invalid command: \(error.localizedDescription)"), to: fd)
                 }
             }
         }

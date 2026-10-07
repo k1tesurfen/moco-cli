@@ -27,6 +27,12 @@ type State struct {
 	Queue []QueueItem `json:"queue,omitempty"`
 	// QueueSeq is the last queue item id handed out.
 	QueueSeq int64 `json:"queue_seq,omitempty"`
+	// Pauses are days (YYYY-MM-DD) without reminders.
+	Pauses []string `json:"pauses,omitempty"`
+	// Daemon is the reminder state of the current day.
+	Daemon *DaemonDay `json:"daemon,omitempty"`
+	// DaemonTest is a reminder `moco daemon test` asks the running daemon to show.
+	DaemonTest string `json:"daemon_test,omitempty"`
 }
 
 // Recent is one recently used project/task pair.

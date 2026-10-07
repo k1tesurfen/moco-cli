@@ -21,14 +21,14 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    func handle(_ cmd: Command) {
+    func handle(_ cmd: Command, from client: Int32) {
         switch cmd.type {
         case "ping":
             center.getNotificationSettings { settings in
-                self.server.send(Event(type: "pong", authorization: Self.describe(settings.authorizationStatus), version: helperVersion))
+                self.server.send(Event(type: "pong", authorization: Self.describe(settings.authorizationStatus), version: helperVersion), to: client)
             }
         case "notify":
-            post(cmd)
+            post(cmd, from: client)
         case "remove":
             let ids = cmd.ids ?? []
             center.removeDeliveredNotifications(withIdentifiers: ids)
@@ -36,13 +36,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case "quit":
             exit(0)
         default:
-            server.send(Event(type: "error", id: cmd.id, message: "unknown command type \(cmd.type)"))
+            server.send(Event(type: "error", id: cmd.id, message: "unknown command type \(cmd.type)"), to: client)
         }
     }
 
-    private func post(_ cmd: Command) {
+    private func post(_ cmd: Command, from client: Int32) {
         guard let id = cmd.id, let title = cmd.title else {
-            server.send(Event(type: "error", id: cmd.id, message: "notify needs id and title"))
+            server.send(Event(type: "error", id: cmd.id, message: "notify needs id and title"), to: client)
             return
         }
         let actions = cmd.actions ?? []
@@ -69,9 +69,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center.getNotificationCategories { _ in
             self.center.add(request) { error in
                 if let error {
-                    self.server.send(Event(type: "error", id: id, message: error.localizedDescription))
+                    self.server.send(Event(type: "error", id: id, message: error.localizedDescription), to: client)
                 } else {
-                    self.server.send(Event(type: "delivered", id: id))
+                    self.server.send(Event(type: "delivered", id: id), to: client)
                 }
             }
         }
@@ -132,7 +132,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         if let text = (response as? UNTextInputNotificationResponse)?.userText {
             event.text = text
         }
-        server.send(event)
+        server.broadcast(event)
         completionHandler()
     }
 }
