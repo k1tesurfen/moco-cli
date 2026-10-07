@@ -5,7 +5,7 @@ with a personal API token. The daemon nudges via native macOS notifications; sim
 questions are answered directly in the notification, everything else is done by the user in
 their own terminal (the tool never opens terminal windows).
 
-Status: **approved** — Phases 0–5 committed
+Status: **approved** — Phases 0–6 committed
 
 ---
 
@@ -222,9 +222,20 @@ moco-cli/
 - Needs to be an `.app` bundle with its own bundle id (`de.artismedia.moco-notifier` or similar),
   ad-hoc signed; the user grants notification permission once on first launch.
 - Launched by the daemon as a background agent app (`LSUIElement`, no Dock icon) and kept running.
-- IPC: Unix domain socket at `~/.local/state/moco/notifier.sock`, newline-delimited JSON.
-  Daemon → helper: `{"id","category","title","body","actions":[…]}`;
-  helper → daemon: `{"id","action","text?"}` or `{"id","dismissed":true}`.
+- IPC: Unix domain socket at `~/.local/state/moco/notifier.sock` (helper listens, one client),
+  newline-delimited JSON, every message has a `type`:
+  daemon → helper: `ping`, `notify {id,category,title,subtitle?,body,actions[{id,title,input?,placeholder?,button?}],sound?}`,
+  `remove {ids}`, `quit`;
+  helper → daemon: `pong {version,authorization}`, `delivered {id}`, `error {id?,message}`,
+  `response {id,action,text?}` (`action:"default"` = notification clicked) or `response {id,dismissed:true}`.
+  Answers given while no daemon is connected are kept (up to 100) and sent to the next client.
+- Each distinct action set becomes its own notification category (stable FNV id); the helper waits
+  for the category registration before posting, so buttons are never missing.
+- The Go side (`internal/notify`) launches the helper with `open -g -a … --args --socket …` if
+  nothing listens. Hidden debug command: `moco notifier status|test|quit`.
+- macOS shows new apps' notifications as **banners** (buttons on hover, disappear after a few
+  seconds). For questions that wait, set "MOCO Reminders" to **Alerts** in System Settings →
+  Notifications.
 - The helper contains no business logic.
 
 ### Daemon
@@ -360,4 +371,17 @@ after the OpenAPI spec. No automated tests ever write to the real MOCO account.
   probe activity and the auto-opened presence deleted, today empty as before.
 - Not tested live: the `moco stop` timer question (needs a terminal) — for the user to try.
 
-Next: Phase 6 (notifier app).
+**2026-10-08 — Phase 6 (notifier app)**
+- `notifier/` Swift package (Swift 6.4, language mode 5, deployment target macOS 26) →
+  `MocoNotifier.app` (`de.artismedia.moco-notifier`, display name "MOCO Reminders", `LSUIElement`,
+  ad-hoc signed). `make build|install|uninstall|test|clean`.
+- `internal/notify` client + protocol tests against a fake helper socket.
+- Installed with `make install`; permission granted by the user. `moco notifier test` verified on
+  macOS 26: button answer (`yes_0800`) and text reply (`other`, `"09:00"`) arrive in Go.
+- **Finding:** with the Alerts style, macOS puts *all* actions into one **Options** menu (next to
+  Close) — there are no separate primary buttons. Consequence for Phase 7: the most likely answer
+  goes first in the list; the body text states the default ("Yes, 08:00" etc.) so the menu is
+  quick to scan. The §3 "primary / Options" split becomes just an ordering.
+- Note: an old `alias moco=…python…` in the user's `~/.zshrc` shadowed the binary (user removes it).
+
+Next: Phase 7 (daemon).
