@@ -86,25 +86,15 @@ func buildDay(date string, presences []api.Presence, activities []api.Activity, 
 	if err != nil {
 		return d, err
 	}
-	isToday := timeutil.Date(now) == date
 	for i := range d.Presences {
 		p := &d.Presences[i]
-		from, err := timeutil.ParseClock(day, p.From)
-		if err != nil {
+		if _, err := timeutil.ParseClock(day, p.From); err != nil {
 			return d, fmt.Errorf("presence %d: %w", p.ID, err)
 		}
 		if p.To == "" {
 			d.OpenPresence = p
-			if isToday && now.After(from) {
-				d.PresentSeconds += int(now.Sub(from).Seconds())
-			}
-			continue
 		}
-		to, err := timeutil.ParseClock(day, p.To)
-		if err != nil {
-			return d, fmt.Errorf("presence %d: %w", p.ID, err)
-		}
-		d.PresentSeconds += int(to.Sub(from).Seconds())
+		d.PresentSeconds += PresenceSeconds(*p, now)
 	}
 	for i := range d.Activities {
 		a := &d.Activities[i]
@@ -116,4 +106,29 @@ func buildDay(date string, presences []api.Presence, activities []api.Activity, 
 		}
 	}
 	return d, nil
+}
+
+// PresenceSeconds is the length of a presence. An open presence counts until now if it is
+// today's, and as zero on any other day.
+func PresenceSeconds(p api.Presence, now time.Time) int {
+	day, err := time.ParseInLocation(timeutil.DateLayout, p.Date, now.Location())
+	if err != nil {
+		return 0
+	}
+	from, err := timeutil.ParseClock(day, p.From)
+	if err != nil {
+		return 0
+	}
+	end := now
+	if p.To != "" {
+		if end, err = timeutil.ParseClock(day, p.To); err != nil {
+			return 0
+		}
+	} else if p.Date != timeutil.Date(now) {
+		return 0
+	}
+	if end.Before(from) {
+		return 0
+	}
+	return int(end.Sub(from).Seconds())
 }

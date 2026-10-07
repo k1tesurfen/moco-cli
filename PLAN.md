@@ -5,7 +5,7 @@ with a personal API token. The daemon nudges via native macOS notifications; sim
 questions are answered directly in the notification, everything else is done by the user in
 their own terminal (the tool never opens terminal windows).
 
-Status: **approved** — Phase 0 done (2026-10-07), Phase 1 in progress
+Status: **approved** — Phases 0–2 done (2026-10-07)
 
 ---
 
@@ -47,11 +47,10 @@ follows pages.
 | Verify token, get own user id | `GET /session` |
 | My projects + their tasks ("what type of work") | `GET /projects/assigned?active=true` |
 | Read presences for a day/week | `GET /users/presences?from=&to=&user_id=<me>` |
-| Start / end presence | `POST /users/presences` (`date`, `from`, `to?`, `is_home_office`) and `PUT /users/presences/{id}` |
-| Punch-clock style | `POST /users/presences/touch` (`override` = `YYYY-MM-DD HH:MM`, `is_home_office`) |
+| Start / end presence | `POST /users/presences` (`date`, `from`, `to?`, `is_home_office`) and `PATCH /users/presences/{id}` |
 | Delete presence | `DELETE /users/presences/{id}` |
 | List activities | `GET /activities?from=&to=&user_id=<me>` |
-| Create / edit / delete activity | `POST /activities` (`date`, `project_id`, `task_id`, `seconds`, `description`), `PUT`, `DELETE /activities/{id}` |
+| Create / edit / delete activity | `POST /activities` (`date`, `project_id`, `task_id`, `seconds`, `description`), `PATCH`, `DELETE /activities/{id}` |
 | Timer | `PATCH /activities/{id}/start_timer`, `PATCH /activities/{id}/stop_timer` (only for today's activities, one timer per user) |
 
 Break model: a day with a break = two presences (`08:00–13:00`, `14:00–17:00`).
@@ -71,8 +70,22 @@ Break model: a day with a break = two presences (`08:00–13:00`, `14:00–17:00
 | No rate-limit headers in responses | Client-side limiter (120 / 2 min) + retry on `429`. |
 | Errors (`403`, `404`) have an **empty body** | Error messages derived from status code; JSON body parsed only when present (e.g. `422`). |
 
-Still open (needs write calls, tested manually with explicit OK): `presences/touch` incl. `423 Locked`,
-`start_timer` / `stop_timer` behaviour, `422` error body shape.
+### Write probe results (2026-10-07, `scripts/probe-write.sh` on empty 2026-10-06, project "Intern")
+
+| Finding | Consequence |
+|---|---|
+| Presence `POST` with `from` only → open presence (`to: null`), also on past days | `moco start` / `moco break` work for back-filling with `--date`. |
+| Presence update is `PATCH` (partial); `DELETE` returns the deleted object | Client uses `PATCH`. |
+| **`is_home_office` is per day**: setting it on one presence changes all presences of that day | Location is chosen once per day (start prompt); `moco presence edit --home/--office` changes the whole day and says so. |
+| Overlapping ranges and a second open presence → `422 {"from":["range overlaps"]}` | Only one open presence at a time; checked locally first for a clear message. |
+| **Malformed time (`"8"`) → `500`** | Client validates `HH:MM` before sending; the offline queue must never retry such a request forever. |
+| Validation errors are a top-level field map: `{"task_id":["ist nicht gültig"]}`, `{"base":["…"]}` (messages may be German) | Error parser handles field maps, `errors`, `message`. |
+| Minutes are kept as given (`17:07`) | Presences are not rounded. |
+| Activity `billable` follows the project (internal project → `false`) | Confirms: billable not exposed. |
+| `start_timer` on a past day → `422 {"base":["Timer can only be started on the current day"]}` | Timer only for today. |
+| `presences/touch`: `override` is a **boolean**, not a timestamp; acts on "now" | `touch` is not used; start/stop use explicit `POST`/`PATCH`. |
+
+Still open: `start_timer` / `stop_timer` on today (whether `seconds` includes the running segment) — Phase 5.
 
 ---
 
@@ -103,11 +116,14 @@ moco logout
 moco status                  # today: presences, logged vs present, gap, running timer, queue size
 
 # presences
-moco start [HH:MM] [--home|--office]      # default: now, default location
-moco break [HH:MM-HH:MM]                  # default: configured break window
-moco stop  [HH:MM]                        # close open presence (default: now)
-moco presence list [--week|--date D]
-moco presence edit|delete <id>
+moco start [HH:MM] [--home|--office] [-d D]  # default: now, default location
+moco break [HH:MM-HH:MM] [-d D]              # default: configured break window
+moco stop  [HH:MM] [-d D]                    # close open presence (default: now)
+moco presence list [--week] [-d D]
+moco presence edit <id> [--from] [--to] [--home|--office]
+moco presence delete <id> [--yes]
+# -d accepts YYYY-MM-DD, today, yesterday, -N, weekday; past days need explicit times
+# times accept 8, 830, 8:30, 8.30, 08:30
 
 # activities
 moco log [alias] [duration] [description] [-p project] [-t task] [-d date]

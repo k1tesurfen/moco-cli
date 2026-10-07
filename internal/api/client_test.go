@@ -109,8 +109,13 @@ func TestEmptyBodyError(t *testing.T) {
 
 func TestValidationErrorBody(t *testing.T) {
 	for body, want := range map[string]string{
+		// Shapes observed on the real API:
+		`{"from":["range overlaps"]}`:                               "from range overlaps",
+		`{"task_id":["ist nicht gültig"]}`:                          "task_id ist nicht gültig",
+		`{"base":["Timer can only be started on the current day"]}`: "Timer can only be started on the current day",
+		// Shapes from the spec:
 		`{"errors":["Task can't be blank","Date is invalid"]}`: "Task can't be blank; Date is invalid",
-		`{"errors":{"seconds":["must be positive"]}}`:          "seconds: [must be positive]",
+		`{"errors":{"seconds":["must be positive"]}}`:          "seconds must be positive",
 		`{"message":"Invalid payload"}`:                        "Invalid payload",
 	} {
 		c := testClient(t, func(w http.ResponseWriter, r *http.Request) {

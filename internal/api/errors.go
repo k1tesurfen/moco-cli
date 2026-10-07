@@ -19,34 +19,57 @@ type APIError struct {
 }
 
 func newAPIError(method, path string, status int, body []byte) *APIError {
-	return &APIError{Method: method, Path: path, Status: status, Message: parseErrorBody(body)}
+	return &APIError{Method: method, Path: strings.TrimPrefix(path, "/api/v1"), Status: status, Message: parseErrorBody(body)}
 }
 
+// parseErrorBody extracts a readable message from an error body. MOCO answers validation
+// errors with a top-level field map like {"from": ["range overlaps"]} or {"base": ["…"]};
+// the spec also documents {"errors": …} and {"message": "…"}.
 func parseErrorBody(body []byte) string {
-	var b struct {
-		Errors  json.RawMessage `json:"errors"`
-		Message string          `json:"message"`
-	}
-	if json.Unmarshal(body, &b) != nil {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(body, &top) != nil {
 		return ""
 	}
-	if b.Message != "" {
-		return b.Message
-	}
-	var list []string
-	if json.Unmarshal(b.Errors, &list) == nil {
-		return strings.Join(list, "; ")
-	}
-	var fields map[string]any
-	if json.Unmarshal(b.Errors, &fields) == nil {
-		var parts []string
-		for k, v := range fields {
-			parts = append(parts, fmt.Sprintf("%s: %v", k, v))
+	if raw, ok := top["message"]; ok && len(top) == 1 {
+		var m string
+		if json.Unmarshal(raw, &m) == nil {
+			return m
 		}
-		sort.Strings(parts)
-		return strings.Join(parts, "; ")
 	}
-	return ""
+	if raw, ok := top["errors"]; ok && len(top) == 1 {
+		var list []string
+		if json.Unmarshal(raw, &list) == nil {
+			return strings.Join(list, "; ")
+		}
+		var nested map[string]json.RawMessage
+		if json.Unmarshal(raw, &nested) == nil {
+			top = nested
+		}
+	}
+	var parts []string
+	for field, raw := range top {
+		msgs := messages(raw)
+		if field != "base" {
+			for i := range msgs {
+				msgs[i] = field + " " + msgs[i]
+			}
+		}
+		parts = append(parts, msgs...)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "; ")
+}
+
+func messages(raw json.RawMessage) []string {
+	var list []string
+	if json.Unmarshal(raw, &list) == nil {
+		return list
+	}
+	var one string
+	if json.Unmarshal(raw, &one) == nil {
+		return []string{one}
+	}
+	return []string{string(raw)}
 }
 
 func (e *APIError) Error() string {

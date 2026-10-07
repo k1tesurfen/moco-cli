@@ -13,8 +13,8 @@ func TestBuildDayToday(t *testing.T) {
 	timerStart := now.Add(-20 * time.Minute)
 	d, err := buildDay("2026-10-07",
 		[]api.Presence{
-			{ID: 2, From: "14:00"},
-			{ID: 1, From: "08:00", To: "13:00"},
+			{ID: 2, Date: "2026-10-07", From: "14:00"},
+			{ID: 1, Date: "2026-10-07", From: "08:00", To: "13:00"},
 		},
 		[]api.Activity{
 			{ID: 10, Seconds: 4 * 3600},
@@ -45,7 +45,7 @@ func TestBuildDayToday(t *testing.T) {
 
 func TestBuildDayPastOpenPresenceNotCounted(t *testing.T) {
 	now := time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
-	d, err := buildDay("2026-10-06", []api.Presence{{ID: 1, From: "08:00"}}, nil, now)
+	d, err := buildDay("2026-10-06", []api.Presence{{ID: 1, Date: "2026-10-06", From: "08:00"}}, nil, now)
 	if err != nil {
 		t.Fatal(err)
 	}

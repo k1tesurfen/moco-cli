@@ -50,15 +50,7 @@ func statusCmd() *cobra.Command {
 				if i == 0 {
 					label = "Presence"
 				}
-				to := p.To
-				if to == "" {
-					to = "…"
-				}
-				where := "office"
-				if p.IsHomeOffice {
-					where = "home"
-				}
-				fmt.Fprintf(w, "%s\t%s–%s  (%s)\n", label, p.From, to, where)
+				fmt.Fprintf(w, "%s\t%s–%s  (%s)\n", label, p.From, orDots(p.To), where(p.IsHomeOffice))
 			}
 			fmt.Fprintf(w, "Present\t%s\n", timeutil.FormatSeconds(day.PresentSeconds))
 			fmt.Fprintf(w, "Logged\t%s\n", timeutil.FormatSeconds(day.LoggedSeconds))

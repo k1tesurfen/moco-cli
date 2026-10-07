@@ -1,0 +1,189 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/k1tesurfen/moco-cli/internal/api"
+	"github.com/k1tesurfen/moco-cli/internal/timeutil"
+)
+
+// dayPresences returns the presences of a date, sorted by start time.
+func (s *Service) dayPresences(ctx context.Context, date time.Time) ([]api.Presence, error) {
+	ds := timeutil.Date(date)
+	ps, err := s.API.Presences(ctx, s.UserID, ds, ds)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(ps, func(i, j int) bool { return ps[i].From < ps[j].From })
+	return ps, nil
+}
+
+func openPresence(ps []api.Presence) *api.Presence {
+	for i := range ps {
+		if ps[i].To == "" {
+			return &ps[i]
+		}
+	}
+	return nil
+}
+
+func span(p api.Presence) string {
+	to := p.To
+	if to == "" {
+		to = "…"
+	}
+	return p.From + "–" + to
+}
+
+// Start opens a presence on date at from ("HH:MM"). home nil means: keep the day's location if
+// the day already has presences, otherwise use the configured default for that weekday.
+// In MOCO, home office is a per-day setting; passing home changes it for the whole day.
+func (s *Service) Start(ctx context.Context, date time.Time, from string, home *bool) (api.Presence, error) {
+	from, err := timeutil.NormalizeClock(from)
+	if err != nil {
+		return api.Presence{}, err
+	}
+	ps, err := s.dayPresences(ctx, date)
+	if err != nil {
+		return api.Presence{}, err
+	}
+	if o := openPresence(ps); o != nil {
+		return api.Presence{}, fmt.Errorf("already started at %s on %s (open presence) — use `moco stop` first", o.From, o.Date)
+	}
+	for _, p := range ps {
+		if from >= p.From && from < p.To {
+			return api.Presence{}, fmt.Errorf("%s falls into the existing presence %s", from, span(p))
+		}
+	}
+	if home == nil && len(ps) == 0 {
+		h := s.Cfg.HomeOfficeOn(date)
+		home = &h
+	}
+	return s.API.CreatePresence(ctx, api.PresenceInput{Date: timeutil.Date(date), From: from, IsHomeOffice: home})
+}
+
+// Stop closes the open presence of date at to ("HH:MM").
+func (s *Service) Stop(ctx context.Context, date time.Time, to string) (api.Presence, error) {
+	to, err := timeutil.NormalizeClock(to)
+	if err != nil {
+		return api.Presence{}, err
+	}
+	ps, err := s.dayPresences(ctx, date)
+	if err != nil {
+		return api.Presence{}, err
+	}
+	o := openPresence(ps)
+	if o == nil {
+		return api.Presence{}, fmt.Errorf("no open presence on %s — nothing to stop", timeutil.Date(date))
+	}
+	if to <= o.From {
+		return api.Presence{}, fmt.Errorf("end %s is not after the start %s", to, o.From)
+	}
+	return s.API.UpdatePresence(ctx, o.ID, api.PresenceInput{To: to})
+}
+
+// BreakResult describes how a presence was split.
+type BreakResult struct {
+	Before api.Presence  // the presence ending at the break start
+	After  *api.Presence // the presence starting at the break end (nil if the break ends the presence)
+}
+
+// Break splits the presence covering from–to ("HH:MM") into two: one ending at from and one
+// starting at to. An open presence stays open after the break.
+func (s *Service) Break(ctx context.Context, date time.Time, from, to string) (BreakResult, error) {
+	var res BreakResult
+	from, err := timeutil.NormalizeClock(from)
+	if err != nil {
+		return res, err
+	}
+	if to, err = timeutil.NormalizeClock(to); err != nil {
+		return res, err
+	}
+	if to <= from {
+		return res, fmt.Errorf("break end %s is not after its start %s", to, from)
+	}
+	ps, err := s.dayPresences(ctx, date)
+	if err != nil {
+		return res, err
+	}
+	var cover *api.Presence
+	for i := range ps {
+		p := &ps[i]
+		if p.To == from {
+			for _, q := range ps {
+				if q.From == to {
+					return res, fmt.Errorf("the break %s–%s is already recorded (%s, %s)", from, to, span(*p), span(q))
+				}
+			}
+		}
+		if p.From < from && (p.To == "" || p.To > from) {
+			cover = p
+		}
+	}
+	if cover == nil {
+		return res, fmt.Errorf("no presence on %s covers %s — start the day first", timeutil.Date(date), from)
+	}
+	if cover.To != "" && cover.To <= to {
+		// The break reaches past the end of this presence: just shorten it.
+		res.Before, err = s.API.UpdatePresence(ctx, cover.ID, api.PresenceInput{To: from})
+		return res, err
+	}
+	for _, p := range ps {
+		if p.ID != cover.ID && p.From < to && p.From >= from {
+			return res, fmt.Errorf("the break %s–%s overlaps the presence %s", from, to, span(p))
+		}
+	}
+
+	// Shorten first, then create the second part; the other order would overlap.
+	res.Before, err = s.API.UpdatePresence(ctx, cover.ID, api.PresenceInput{To: from})
+	if err != nil {
+		return res, err
+	}
+	after, err := s.API.CreatePresence(ctx, api.PresenceInput{Date: cover.Date, From: to, To: cover.To})
+	if err != nil {
+		return res, fmt.Errorf("shortened %s to %s, but could not create the part after the break (%s–%s): %w",
+			span(*cover), span(res.Before), to, orEllipsis(cover.To), err)
+	}
+	res.After = &after
+	return res, nil
+}
+
+func orEllipsis(s string) string {
+	if s == "" {
+		return "…"
+	}
+	return s
+}
+
+// PresencesBetween lists presences in [from, to].
+func (s *Service) PresencesBetween(ctx context.Context, from, to time.Time) ([]api.Presence, error) {
+	ps, err := s.API.Presences(ctx, s.UserID, timeutil.Date(from), timeutil.Date(to))
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(ps, func(i, j int) bool { return ps[i].Date+ps[i].From < ps[j].Date+ps[j].From })
+	return ps, nil
+}
+
+// EditPresence changes from/to (normalized) and/or the day's location.
+func (s *Service) EditPresence(ctx context.Context, id int64, from, to string, home *bool) (api.Presence, error) {
+	in := api.PresenceInput{IsHomeOffice: home}
+	var err error
+	if from != "" {
+		if in.From, err = timeutil.NormalizeClock(from); err != nil {
+			return api.Presence{}, err
+		}
+	}
+	if to != "" {
+		if in.To, err = timeutil.NormalizeClock(to); err != nil {
+			return api.Presence{}, err
+		}
+	}
+	if in == (api.PresenceInput{}) {
+		return api.Presence{}, fmt.Errorf("nothing to change — pass --from, --to, --home or --office")
+	}
+	return s.API.UpdatePresence(ctx, id, in)
+}

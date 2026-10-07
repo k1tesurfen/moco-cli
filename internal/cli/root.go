@@ -37,7 +37,8 @@ func Execute() int {
 		},
 	}
 	root.PersistentFlags().BoolVar(&flags.json, "json", false, "machine-readable output")
-	root.AddCommand(loginCmd(), logoutCmd(), statusCmd(), projectsCmd())
+	root.AddCommand(loginCmd(), logoutCmd(), statusCmd(), projectsCmd(),
+		startCmd(), breakCmd(), stopCmd(), presenceCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
