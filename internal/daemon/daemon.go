@@ -39,6 +39,7 @@ type Daemon struct {
 	svc         *service.Service
 	client      *notify.Client
 	lastRecheck time.Time
+	lastRevive  time.Time
 	lastSync    time.Time
 	lastErr     map[string]string
 }
@@ -197,8 +198,25 @@ func (dm *Daemon) tick(ctx context.Context) {
 		return day
 	}
 
+	if st := d.Events[string(Start)]; st != nil && st.Skipped && now.Sub(dm.lastRevive) >= recheckEvery {
+		dm.lastRevive = now
+		if Revive(d, dm.svc.Cfg, now, facts()) {
+			dm.Log.Printf("start: the day has no presence any more — asking after all")
+		}
+	}
+
 	if dueAny(d, now) {
-		if ev, ok := Pick(d, dm.svc.Cfg, now, facts()); ok {
+		wasDone := map[Event]bool{}
+		for _, ev := range Events {
+			wasDone[ev] = d.Events[string(ev)].Done
+		}
+		ev, ok := Pick(d, dm.svc.Cfg, now, facts())
+		for _, e := range Events {
+			if st := d.Events[string(e)]; !wasDone[e] && st.Skipped {
+				dm.Log.Printf("%s skipped: %s", e, SkipReason(e, day))
+			}
+		}
+		if ok {
 			n := message(ev, dm.svc.Cfg, now, day, noteID(d.Date, ev))
 			if err := dm.notify(ctx, n); err == nil {
 				Shown(d, dm.svc.Cfg, ev, now)

@@ -5,6 +5,7 @@ package daemon
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/k1tesurfen/moco-cli/internal/config"
@@ -96,7 +97,7 @@ func Pick(d *store.DaemonDay, cfg config.Config, now time.Time, day *service.Day
 		case !known:
 			// wait until MOCO can be asked
 		case !relevant:
-			st.Done = true
+			st.Done, st.Skipped = true, true
 		case pick == "":
 			pick = ev
 		default:
@@ -104,6 +105,49 @@ func Pick(d *store.DaemonDay, cfg config.Config, now time.Time, day *service.Day
 		}
 	}
 	return pick, pick != ""
+}
+
+// SkipReason explains why ev is not needed, for the log.
+func SkipReason(ev Event, day *service.Day) string {
+	if day == nil {
+		return ""
+	}
+	var spans []string
+	for _, p := range day.Presences {
+		to := p.To
+		if to == "" {
+			to = "…"
+		}
+		spans = append(spans, p.From+"–"+to)
+	}
+	switch ev {
+	case Start:
+		return "presence already recorded (" + strings.Join(spans, ", ") + ")"
+	case Morning, Afternoon:
+		if len(day.Presences) == 0 {
+			return "no presence today"
+		}
+		return "nothing (or less than one rounding step) left to log"
+	case Break:
+		return "no single open presence to split (" + strings.Join(spans, ", ") + ")"
+	case End:
+		return "no open presence"
+	}
+	return ""
+}
+
+// Revive brings back a start question that was skipped because the day already had a presence,
+// once that presence is gone (e.g. a test entry deleted) — until the end of the working day.
+func Revive(d *store.DaemonDay, cfg config.Config, now time.Time, day *service.Day) bool {
+	st := d.Events[string(Start)]
+	if st == nil || !st.Skipped || day == nil || !now.Before(at(now, cfg.Schedule.End)) {
+		return false
+	}
+	if relevant, _ := Relevant(Start, cfg, day); !relevant {
+		return false
+	}
+	st.Done, st.Skipped, st.Next = false, false, now
+	return true
 }
 
 // Shown updates the state after ev was shown: when (and whether) it is asked again.
@@ -166,6 +210,6 @@ func StillWorking(d *store.DaemonDay, cfg config.Config, now time.Time) {
 // DayOff closes every reminder of the day.
 func DayOff(d *store.DaemonDay) {
 	for _, st := range d.Events {
-		st.Done, st.Shown = true, false
+		st.Done, st.Shown, st.Skipped = true, false, false // a day off is never revived
 	}
 }

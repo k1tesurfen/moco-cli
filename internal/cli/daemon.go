@@ -325,7 +325,7 @@ func daemonStatusCmd() *cobra.Command {
 					"scheduled":   "at " + r.Next,
 					"shown":       "on screen, unanswered",
 					"done":        "done",
-					"skipped":     "skipped",
+					"skipped":     "skipped — already settled in MOCO",
 					"asked_again": "asked again at " + r.Next,
 				}[r.State]
 				if r.State == "shown" && r.Next != "" {

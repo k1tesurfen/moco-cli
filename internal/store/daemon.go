@@ -17,6 +17,8 @@ type EventState struct {
 	Fired int       `json:"fired,omitempty"` // how often it was shown
 	Done  bool      `json:"done,omitempty"`  // nothing more to ask today
 	Shown bool      `json:"shown,omitempty"` // a notification is on screen and unanswered
+	// Skipped means Done because MOCO already had the answer when it was due (not answered).
+	Skipped bool `json:"skipped,omitempty"`
 }
 
 // Paused reports whether date is a day off.

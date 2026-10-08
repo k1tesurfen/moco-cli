@@ -186,3 +186,50 @@ func TestDaysOffAndUnknownState(t *testing.T) {
 		t.Error("morning reminder must wait for MOCO, not be dropped")
 	}
 }
+
+func TestSkippedStartIsRevived(t *testing.T) {
+	d := NewDay(cfg, thu, false)
+	early := dayWith([]api.Presence{{From: "08:00", To: "13:00"}}, 0, 0) // a test entry
+	if ev, ok := Pick(d, cfg, clk("08:00"), early); ok {
+		t.Fatalf("start asked although a presence exists: %s", ev)
+	}
+	st := d.Events["start"]
+	if !st.Done || !st.Skipped {
+		t.Fatalf("start state %+v, want done+skipped", st)
+	}
+	if got := SkipReason(Start, early); got != "presence already recorded (08:00–13:00)" {
+		t.Errorf("reason %q", got)
+	}
+	if Revive(d, cfg, clk("08:05"), early) {
+		t.Error("revived while the presence still exists")
+	}
+	if !Revive(d, cfg, clk("08:10"), none) {
+		t.Fatal("not revived after the presence was deleted")
+	}
+	if ev, _ := Pick(d, cfg, clk("08:10"), none); ev != Start {
+		t.Fatalf("after revival: %s", ev)
+	}
+
+	// An answered start question is never revived, and nothing after the end of the day.
+	d = NewDay(cfg, thu, false)
+	Pick(d, cfg, clk("08:00"), none)
+	Shown(d, cfg, Start, clk("08:00"))
+	Answered(d, Start)
+	if Revive(d, cfg, clk("10:00"), none) {
+		t.Error("answered start revived")
+	}
+	d = NewDay(cfg, thu, false)
+	Pick(d, cfg, clk("08:00"), early)
+	if Revive(d, cfg, clk("17:00"), none) {
+		t.Error("revived after the end of the day")
+	}
+}
+
+func TestPausedDayIsNotRevived(t *testing.T) {
+	d := NewDay(cfg, thu, false)
+	Pick(d, cfg, clk("08:00"), dayWith([]api.Presence{{From: "08:00", To: "13:00"}}, 0, 0))
+	DayOff(d)
+	if Revive(d, cfg, clk("09:00"), none) {
+		t.Error("revived on a day off")
+	}
+}

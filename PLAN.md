@@ -466,3 +466,11 @@ after the OpenAPI spec. No automated tests ever write to the real MOCO account.
   `make install` writes `_moco` to Homebrew's zsh `site-functions` (on zsh's default fpath).
 - README with install, daily use, TUI keys, reminders, config, offline, scripting, development.
 - Final `make install`; daemon restarted and running, today's reminders scheduled.
+
+**2026-10-08 08:05 — first real morning**
+- No start question at 08:00: a test presence 08:00–13:00 (created 00:33) made the daemon skip it
+  correctly, but silently. Timezone fine (due 08:00+02:00).
+- Skipped reminders are now marked `skipped` (not answered) and logged with the reason
+  ("start skipped: presence already recorded (08:00–13:00)"). A skipped start question is
+  re-checked every 5 min until `schedule.end`; if the day has no presence any more, it is asked
+  after all. A day off is never revived. `daemon status` shows "skipped — already settled in MOCO".
