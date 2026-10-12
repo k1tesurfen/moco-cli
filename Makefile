@@ -40,7 +40,7 @@ install: build
 	@echo "Installed $(PREFIX)/bin/moco ($$($(PREFIX)/bin/moco --version)) and $(APPDIR)/MocoNotifier.app"
 	@# Re-install the daemon if one is set up: rewrites its LaunchAgent, removes agents of
 	@# earlier versions and restarts it on the new binary.
-	@if ls $(AGENTS)/*.moco.daemon.plist >/dev/null 2>&1; then $(PREFIX)/bin/moco daemon install; \
+	@if ls $(AGENTS)/*moco.daemon.plist >/dev/null 2>&1; then $(PREFIX)/bin/moco daemon install; \
 	else echo "No daemon set up — \`moco daemon install\` starts the reminders."; fi
 
 # update: pull the latest commits, run the tests, then install and restart everything.

@@ -13,22 +13,39 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"text/template"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/k1tesurfen/moco-cli/internal/config"
 	"github.com/k1tesurfen/moco-cli/internal/daemon"
 	"github.com/k1tesurfen/moco-cli/internal/notify"
 	"github.com/k1tesurfen/moco-cli/internal/store"
 )
 
-const agentLabel = "io.github.k1tesurfen.moco.daemon"
+// agentLabel is the LaunchAgent label, named after the MOCO account it reminds for:
+// "<subdomain>.moco.daemon". Without a subdomain (not logged in) it is plain "moco.daemon".
+var agentLabel = sync.OnceValue(func() string {
+	cfg, _ := config.Load()
+	sub := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+			return r
+		}
+		return -1
+	}, strings.ToLower(cfg.Subdomain))
+	if sub == "" {
+		return "moco.daemon"
+	}
+	return sub + ".moco.daemon"
+})
 
 func agentPlist() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "LaunchAgents", agentLabel+".plist")
+	return filepath.Join(home, "Library", "LaunchAgents", agentLabel()+".plist")
 }
 
 func daemonLog() string {
@@ -37,7 +54,7 @@ func daemonLog() string {
 }
 
 func guiDomain() string   { return "gui/" + strconv.Itoa(os.Getuid()) }
-func agentTarget() string { return guiDomain() + "/" + agentLabel }
+func agentTarget() string { return guiDomain() + "/" + agentLabel() }
 
 func launchctl(args ...string) (string, error) {
 	out, err := exec.Command("/bin/launchctl", args...).CombinedOutput()
@@ -134,6 +151,9 @@ func daemonInstallCmd() *cobra.Command {
 			if strings.Contains(exe, "go-build") {
 				return errors.New("run install from the installed binary (`make install`), not via `go run`")
 			}
+			if agentLabel() == "moco.daemon" {
+				return errors.New("not logged in — run `moco login` first (the daemon is named after your MOCO subdomain)")
+			}
 			if _, err := os.Stat(notify.DefaultApp()); err != nil {
 				return fmt.Errorf("%s is missing — run `make install` first", notify.DefaultApp())
 			}
@@ -144,7 +164,7 @@ func daemonInstallCmd() *cobra.Command {
 				return err
 			}
 			var buf bytes.Buffer
-			if err := plistTemplate.Execute(&buf, map[string]string{"Label": agentLabel, "Program": exe, "Log": daemonLog()}); err != nil {
+			if err := plistTemplate.Execute(&buf, map[string]string{"Label": agentLabel(), "Program": exe, "Log": daemonLog()}); err != nil {
 				return err
 			}
 			if err := os.WriteFile(agentPlist(), buf.Bytes(), 0o644); err != nil {
@@ -163,11 +183,11 @@ func daemonInstallCmd() *cobra.Command {
 	}
 }
 
-// removeOldAgents stops and removes LaunchAgents of this daemon installed under an earlier
-// label (`*.moco.daemon.plist` running `moco daemon run`), so that an update never leaves two
-// daemons sending the same reminders.
+// removeOldAgents stops and removes LaunchAgents of this daemon installed under another label
+// (an earlier naming or another subdomain: `*moco.daemon.plist` running `moco daemon run`), so
+// that an update never leaves two daemons sending the same reminders.
 func removeOldAgents() {
-	paths, _ := filepath.Glob(filepath.Join(filepath.Dir(agentPlist()), "*.moco.daemon.plist"))
+	paths, _ := filepath.Glob(filepath.Join(filepath.Dir(agentPlist()), "*moco.daemon.plist"))
 	for _, p := range paths {
 		if p == agentPlist() {
 			continue

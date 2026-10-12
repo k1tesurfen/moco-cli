@@ -19,7 +19,7 @@ Requirements: macOS 26+, Go 1.27+, Xcode command line tools (Swift 6) for the no
 ```sh
 make install          # ~/.local/bin/moco, ~/Applications/MocoNotifier.app, zsh completion
 moco login            # subdomain + personal API token (MOCO → Profile → Integrations)
-moco daemon install   # reminders: LaunchAgent, starts at login
+moco daemon install   # reminders: LaunchAgent <subdomain>.moco.daemon, starts at login
 ```
 
 `~/.local/bin` must be on your `PATH`. On the first reminder macOS asks whether "MOCO Reminders"
