@@ -62,7 +62,7 @@ type Alias struct {
 // Default returns the built-in defaults.
 func Default() Config {
 	return Config{
-		RoundingMinutes: 15,
+		RoundingMinutes: 5,
 		Rounding:        "up",
 		Schedule: Schedule{
 			Workdays:      []string{"mon", "tue", "wed", "thu", "fri"},
@@ -214,7 +214,7 @@ const template = `# moco-cli configuration. The API token is stored in the macOS
 subdomain = %q
 
 # Durations are always rounded up to this many minutes.
-rounding_minutes = 15
+rounding_minutes = 5
 rounding = "up"
 
 [schedule]

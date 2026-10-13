@@ -74,7 +74,7 @@ func TestQueueLogAndNoDuplicateWhenReplyWasLost(t *testing.T) {
 
 	fake.DropNextReply() // MOCO stores it, the client sees 502
 	q := asQueued(t, second(s.LogActivity(ctx, day, intern, intern.Tasks[0], 67*60, "Fix login")))
-	if q.Item.Seconds != 75*60 || q.Item.ProjectName != intern.Name || q.Item.TaskName != "Programming" {
+	if q.Item.Seconds != 70*60 || q.Item.ProjectName != intern.Name || q.Item.TaskName != "Programming" {
 		t.Errorf("queued: %+v", q.Item)
 	}
 	if n := len(fake.Activities("2026-10-06")); n != 1 {

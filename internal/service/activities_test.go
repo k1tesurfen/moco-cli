@@ -80,7 +80,7 @@ func TestLogActivityRoundsUpAndRemembers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Seconds != 75*60 || a.Description != "Fix login" || a.Task.Name != "Programming" {
+	if a.Seconds != 70*60 || a.Description != "Fix login" || a.Task.Name != "Programming" {
 		t.Errorf("activity = %+v", a)
 	}
 	if got := fake.Activities("2026-10-06"); len(got) != 1 {
@@ -116,12 +116,12 @@ func TestEditAndDeleteOnlyOwnActivities(t *testing.T) {
 	theirs := fake.AddActivity(api.Activity{Date: "2026-10-06", Project: api.Ref{ID: 1}, Task: api.Ref{ID: 11}, Seconds: 900,
 		User: api.UserRef{ID: 1, Firstname: "Daniel", Lastname: "G"}})
 
-	sec, desc := 20*60, "edited"
+	sec, desc := 22*60, "edited"
 	a, err := s.EditActivity(ctx, mine, ActivityChange{Seconds: &sec, Description: &desc})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Seconds != 30*60 || a.Description != "edited" {
+	if a.Seconds != 25*60 || a.Description != "edited" {
 		t.Errorf("edited = %+v", a)
 	}
 	if _, err := s.EditActivity(ctx, theirs, ActivityChange{Description: &desc}); err == nil || !strings.Contains(err.Error(), "not to you") {

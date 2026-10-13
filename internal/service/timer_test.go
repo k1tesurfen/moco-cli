@@ -64,10 +64,10 @@ func TestTimerStartStopRoundsUpAndSetsDescription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Tracked != 67*60 || res.Activity.Seconds != 75*60 || res.Activity.Description != "Fix login" {
+	if res.Tracked != 67*60 || res.Activity.Seconds != 70*60 || res.Activity.Description != "Fix login" {
 		t.Errorf("stopped: %+v", res)
 	}
-	if got := dump(); got != "Fix login 1h15m0s;" {
+	if got := dump(); got != "Fix login 1h10m0s;" {
 		t.Errorf("activities = %q", got)
 	}
 	if _, err := s.StopTimer(ctx, "x"); !errors.Is(err, ErrNoTimer) {
@@ -86,7 +86,7 @@ func TestTimerShortRunBooksOneStepAndKeepsDescription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Activity.Seconds != 15*60 || res.Activity.Description != "Call" {
+	if res.Activity.Seconds != 5*60 || res.Activity.Description != "Call" {
 		t.Errorf("stopped: %+v", res.Activity)
 	}
 }
@@ -131,7 +131,7 @@ func TestTimerStopQueuesUpdateWhenSavingFails(t *testing.T) {
 	if _, err := s.StartTimer(ctx, intern, intern.Tasks[0], ""); err != nil {
 		t.Fatal(err)
 	}
-	clock = clock.Add(20 * time.Minute)
+	clock = clock.Add(22 * time.Minute)
 
 	// stop_timer works, the PATCH with rounded time + description does not.
 	fake.Fail = func(r *http.Request) int {
@@ -142,7 +142,7 @@ func TestTimerStopQueuesUpdateWhenSavingFails(t *testing.T) {
 	}
 	res, err := s.StopTimer(ctx, "Review")
 	q := asQueued(t, err)
-	if q.Item.Kind != store.KindEdit || q.Item.Seconds != 30*60 || q.Item.Description != "Review" || res.Tracked != 20*60 {
+	if q.Item.Kind != store.KindEdit || q.Item.Seconds != 25*60 || q.Item.Description != "Review" || res.Tracked != 22*60 {
 		t.Fatalf("queued %+v, res %+v", q.Item, res)
 	}
 	fake.Fail = nil
@@ -150,7 +150,7 @@ func TestTimerStopQueuesUpdateWhenSavingFails(t *testing.T) {
 		t.Fatalf("sync: %+v", r)
 	}
 	a := fake.Activities("2026-10-06")[0]
-	if a.Seconds != 30*60 || a.Description != "Review" || a.TimerRunning() {
+	if a.Seconds != 25*60 || a.Description != "Review" || a.TimerRunning() {
 		t.Errorf("after sync: %+v", a)
 	}
 }

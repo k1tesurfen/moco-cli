@@ -354,7 +354,7 @@ func TestLogActivityInPopup(t *testing.T) {
 	}
 	press(m, "enter") // take ACME / Design, on to the duration
 	typeText(m, "1h07")
-	if !strings.Contains(m.View(), "1h07 → 1h15") {
+	if !strings.Contains(m.View(), "1h07 → 1h10") {
 		t.Error("no rounding preview")
 	}
 	press(m, "enter")
@@ -365,10 +365,10 @@ func TestLogActivityInPopup(t *testing.T) {
 	}
 	as := fake.Activities("2026-10-06")
 	last := as[len(as)-1]
-	if len(as) != 2 || last.Task.ID != 21 || last.Seconds != 75*60 || last.Description != "Logo variants" {
+	if len(as) != 2 || last.Task.ID != 21 || last.Seconds != 70*60 || last.Description != "Logo variants" {
 		t.Fatalf("activities %+v", as)
 	}
-	if !strings.Contains(m.msg, "Logged 1h15 on ACME Website / Design") {
+	if !strings.Contains(m.msg, "Logged 1h10 on ACME Website / Design") {
 		t.Errorf("msg %q", m.msg)
 	}
 
@@ -381,7 +381,7 @@ func TestLogActivityInPopup(t *testing.T) {
 	typeText(m, "Rest")
 	press(m, "enter")
 	as = fake.Activities("2026-10-06")
-	if last := as[len(as)-1]; last.Description != "Rest" || last.Seconds != 6*3600-3*3600-75*60 {
+	if last := as[len(as)-1]; last.Description != "Rest" || last.Seconds != 6*3600-3*3600-70*60 {
 		t.Errorf("gap entry %+v", last)
 	}
 }

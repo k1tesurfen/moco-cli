@@ -13,7 +13,7 @@ func TestMissingFileGivesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Schedule.Start != "08:00" || cfg.RoundingMinutes != 15 {
+	if cfg.Schedule.Start != "08:00" || cfg.RoundingMinutes != 5 {
 		t.Errorf("defaults not applied: %+v", cfg)
 	}
 }

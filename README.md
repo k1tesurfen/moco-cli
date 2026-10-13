@@ -61,7 +61,7 @@ moco list --week          # moco edit <id> · moco delete <id>
 moco timer start dev      # timer on today's activity; moco timer stop asks the description
 ```
 
-Durations: `1h30`, `90m`, `1:30`, `1.5` – always **rounded up** to 15 minutes (configurable).
+Durations: `1h30`, `90m`, `1:30`, `1.5` – always **rounded up** to 5 minutes (configurable).
 Times: `8`, `830`, `8:30`, `08:30`. Dates (`-d`): `today`, `yesterday`, `-2`, `mon`, `2026-10-05`.
 
 ### Aliases
