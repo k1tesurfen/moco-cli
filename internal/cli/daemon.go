@@ -174,13 +174,32 @@ func daemonInstallCmd() *cobra.Command {
 			if _, loaded := agentPID(); loaded {
 				launchctl("bootout", agentTarget())
 			}
-			if _, err := launchctl("bootstrap", guiDomain(), agentPlist()); err != nil {
+			if err := bootstrapAgent(); err != nil {
 				return err
 			}
 			fmt.Printf("Installed %s (moco %s)\n  runs %s daemon run\n  log  %s\n", agentPlist(), Version, exe, daemonLog())
 			return waitRunning()
 		},
 	}
+}
+
+// bootstrapAgent loads the agent. bootout returns before launchd has torn the old instance
+// down, and bootstrapping meanwhile fails with "Bootstrap failed: 5: Input/output error" – so
+// wait until it is gone and retry for a few seconds.
+func bootstrapAgent() error {
+	var err error
+	for i := 0; i < 20; i++ {
+		if _, loaded := agentPID(); !loaded {
+			if _, err = launchctl("bootstrap", guiDomain(), agentPlist()); err == nil {
+				return nil
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if err == nil {
+		err = fmt.Errorf("%s is still loaded after bootout", agentTarget())
+	}
+	return err
 }
 
 // removeOldAgents stops and removes LaunchAgents of this daemon installed under another label
@@ -248,7 +267,7 @@ func daemonStartCmd() *cobra.Command {
 				if _, err := launchctl("kickstart", "-k", agentTarget()); err != nil {
 					return err
 				}
-			} else if _, err := launchctl("bootstrap", guiDomain(), agentPlist()); err != nil {
+			} else if err := bootstrapAgent(); err != nil {
 				return err
 			}
 			return waitRunning()
