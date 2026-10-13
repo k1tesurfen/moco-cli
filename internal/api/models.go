@@ -29,7 +29,8 @@ type Task struct {
 	Billable bool   `json:"billable"`
 }
 
-// Project is an entry of GET /projects/assigned.
+// Project is an entry of GET /projects/assigned or GET /projects. Contract is set by the
+// former (the user's own membership), Contracts by the latter (the whole staff).
 type Project struct {
 	ID         int64  `json:"id"`
 	Identifier string `json:"identifier"`
@@ -42,6 +43,22 @@ type Project struct {
 		UserID int64 `json:"user_id"`
 		Active bool  `json:"active"`
 	} `json:"contract"`
+	Contracts []Contract `json:"contracts,omitempty"`
+}
+
+// Contract is a user's membership in a project's staff ("staff assignment").
+type Contract struct {
+	ID       int64 `json:"id"`
+	UserID   int64 `json:"user_id"`
+	Active   bool  `json:"active"`
+	Billable bool  `json:"billable"`
+}
+
+// ContractInput is the body for creating or updating a contract.
+type ContractInput struct {
+	UserID   int64 `json:"user_id,omitempty"`
+	Active   *bool `json:"active,omitempty"`
+	Billable *bool `json:"billable,omitempty"`
 }
 
 // Presence is a working-time block ("Arbeitszeit") of one day. From/To are "HH:MM";

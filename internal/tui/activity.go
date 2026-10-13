@@ -58,7 +58,7 @@ func (m *model) addActivity() tea.Cmd {
 				a.Project.Name, a.Task.Name, date.Format("Mon 2 Jan")), nil
 		}), nil
 	}
-	return nil
+	return m.enableJoin(f)
 }
 
 func (m *model) editActivity(a api.Activity) tea.Cmd {
@@ -110,7 +110,7 @@ func (m *model) editActivity(a api.Activity) tea.Cmd {
 				u.Task.Name, oneLine(u.Description)), nil
 		}), nil
 	}
-	return nil
+	return m.enableJoin(f)
 }
 
 // timerKey stops the running timer (asking for the description) or starts one (popup).
@@ -155,5 +155,5 @@ func (m *model) timerKey() tea.Cmd {
 			return fmt.Sprintf("Timer started on %s / %s at %s.", a.Project.Name, a.Task.Name, timeutil.Clock(m.svc.Now())), nil
 		}), nil
 	}
-	return nil
+	return m.enableJoin(f)
 }

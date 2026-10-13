@@ -156,6 +156,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		s.listActivities(w, r)
 	case path == "/api/v1/activities" && r.Method == http.MethodPost:
 		s.writeActivity(w, r, nil)
+	case strings.HasPrefix(path, "/api/v1/projects"):
+		s.handleProjects(w, r)
 	default:
 		m := idPath.FindStringSubmatch(path)
 		if m == nil {
@@ -257,13 +259,27 @@ func (s *Server) openPresenceForTimer(date string) {
 		IsHomeOffice: s.dayHome(date, 0), CreatedAt: now.UTC(), UpdatedAt: now.UTC()}
 }
 
-// AddProject registers a project so activities can reference it by id.
+// AddProject registers a project the user is on, so activities can reference it by id.
 func (s *Server) AddProject(p api.Project) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.nextID++
+	p.Contracts = append(p.Contracts, api.Contract{ID: s.nextID, UserID: UserID, Active: true, Billable: p.Billable})
+	s.addProject(p)
+}
+
+// AddOtherProject registers a project the user is not on (p.Contracts are colleagues).
+func (s *Server) AddOtherProject(p api.Project) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.addProject(p)
+}
+
+func (s *Server) addProject(p api.Project) {
 	if s.projects == nil {
 		s.projects = map[int64]api.Project{}
 	}
+	p.Active = true
 	s.projects[p.ID] = p
 }
 

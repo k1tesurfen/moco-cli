@@ -96,3 +96,35 @@ func (c *Client) Activity(ctx context.Context, id int64) (Activity, error) {
 	_, err := c.do(ctx, http.MethodGet, c.url("/activities/"+itoa(id), nil), nil, &a)
 	return a, err
 }
+
+// AllProjects returns the company's active, non-archived projects with their tasks and staff
+// (contracts). Unlike AssignedProjects it also lists projects the user is not on.
+func (c *Client) AllProjects(ctx context.Context) ([]Project, error) {
+	return getAll[Project](ctx, c, "/projects", nil)
+}
+
+// Contracts returns the staff of a project. MOCO calls a person's project membership a
+// "contract" (staff assignment).
+func (c *Client) Contracts(ctx context.Context, projectID int64) ([]Contract, error) {
+	return getAll[Contract](ctx, c, "/projects/"+itoa(projectID)+"/contracts", nil)
+}
+
+// CreateContract puts a user on a project's staff.
+func (c *Client) CreateContract(ctx context.Context, projectID int64, in ContractInput) (Contract, error) {
+	var k Contract
+	_, err := c.do(ctx, http.MethodPost, c.url("/projects/"+itoa(projectID)+"/contracts", nil), in, &k)
+	return k, err
+}
+
+// UpdateContract changes a staff assignment (user_id can't change).
+func (c *Client) UpdateContract(ctx context.Context, projectID, id int64, in ContractInput) (Contract, error) {
+	var k Contract
+	_, err := c.do(ctx, http.MethodPut, c.url("/projects/"+itoa(projectID)+"/contracts/"+itoa(id), nil), in, &k)
+	return k, err
+}
+
+// DeleteContract removes a user from a project's staff; MOCO refuses while they have hours on it.
+func (c *Client) DeleteContract(ctx context.Context, projectID, id int64) error {
+	_, err := c.do(ctx, http.MethodDelete, c.url("/projects/"+itoa(projectID)+"/contracts/"+itoa(id), nil), nil, nil)
+	return err
+}

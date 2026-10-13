@@ -516,3 +516,106 @@ func TestPresenceFormReopensWhenMOCORejects(t *testing.T) {
 		t.Errorf("values lost: %v", v)
 	}
 }
+
+// seedJoinable adds ACME (with a colleague on it) as a project the user is not on.
+func seedJoinable(fake *fakemoco.Server) {
+	fake.AddOtherProject(api.Project{ID: 2, Name: "ACME Website", Identifier: "P2", Customer: api.Ref{Name: "ACME"},
+		Tasks:     []api.Task{{ID: 20, Name: "Dev", Active: true}, {ID: 21, Name: "Design", Active: true}},
+		Contracts: []api.Contract{{ID: 900, UserID: 1, Active: true}}})
+}
+
+func TestJoinProjectFromLogPopup(t *testing.T) {
+	m, fake := newTestModel(t)
+	seed(fake)
+	seedJoinable(fake)
+	do(m, m.loadProjects(true))
+	do(m, m.ensureWeek(false))
+
+	press(m, "a")
+	for _, i := range m.form.matches {
+		if m.form.options[i].join {
+			t.Fatal("projects to join must only show up when searching")
+		}
+	}
+	typeText(m, "acme")
+	if o := m.form.selected(); o == nil || !o.join || o.pick.Project.ID != 2 {
+		t.Fatalf("selected %+v, want the ACME join row", o)
+	}
+	if v := m.View(); !strings.Contains(v, "+ ACME Website") || !strings.Contains(v, "enter adds you to its team") {
+		t.Fatalf("popup:\n%s", v)
+	}
+	press(m, "enter") // join
+	if staff := fake.Staff(2); len(staff) != 2 || staff[1].UserID != fakemoco.UserID {
+		t.Fatalf("staff %+v", staff)
+	}
+	if o := m.form.selected(); o == nil || o.join || o.pick.Project.ID != 2 || o.pick.Task.ID != 20 {
+		t.Fatalf("after join selected %+v, want ACME / Dev", o)
+	}
+	if len(m.projects.list) != 2 || !strings.Contains(m.msg, "Joined ACME Website") {
+		t.Errorf("projects %d, msg %q", len(m.projects.list), m.msg)
+	}
+	press(m, "enter")
+	typeText(m, "1h")
+	press(m, "enter")
+	typeText(m, "Kickoff")
+	press(m, "enter")
+	as := fake.Activities("2026-10-06")
+	if last := as[len(as)-1]; last.Project.ID != 2 || last.Task.ID != 20 || last.Seconds != 3600 {
+		t.Errorf("activities %+v", as)
+	}
+
+	// The joinable projects are loaded once per session; ACME is no longer offered.
+	press(m, "a")
+	typeText(m, "acme")
+	for _, i := range m.form.matches {
+		if m.form.options[i].join {
+			t.Error("ACME is still offered to join")
+		}
+	}
+	if n := count(fake, "GET /api/v1/projects"); n != 1 {
+		t.Errorf("loaded all projects %d times", n)
+	}
+}
+
+func TestJoinAndLeaveInProjectsPanel(t *testing.T) {
+	m, fake := newTestModel(t)
+	seed(fake)
+	seedJoinable(fake)
+	do(m, m.loadProjects(true))
+
+	press(m, "4", "+")
+	if m.form == nil || !m.form.joinOnly {
+		t.Fatal("no join popup")
+	}
+	if v := m.View(); !strings.Contains(v, "Join a project") || !strings.Contains(v, "+ ACME Website") {
+		t.Fatalf("popup:\n%s", v)
+	}
+	typeText(m, "intern") // own projects are not offered
+	if len(m.form.matches) != 0 {
+		t.Errorf("matches %v for an own project", m.form.matches)
+	}
+	press(m, "ctrl+u")
+	typeText(m, "acme")
+	press(m, "enter")
+	if m.form != nil {
+		t.Fatalf("popup still open: %s", m.form.err)
+	}
+	if p := m.selProject(); p == nil || p.ID != 2 {
+		t.Fatalf("selected project %+v, want ACME", p)
+	}
+
+	press(m, "-")
+	if m.confirm == nil || !strings.Contains(m.confirm.question, "Leave ACME Website") {
+		t.Fatal("no confirmation")
+	}
+	press(m, "y")
+	if staff := fake.Staff(2); len(staff) != 1 || len(m.projects.list) != 1 || !strings.Contains(m.msg, "Left ACME Website") {
+		t.Errorf("staff %+v, projects %d, msg %q", staff, len(m.projects.list), m.msg)
+	}
+
+	// Leaving a project with hours is refused by MOCO and shown.
+	press(m, "-", "y")
+	if !strings.Contains(m.msg, "without booked hours") {
+		t.Errorf("msg %q", m.msg)
+	}
+}

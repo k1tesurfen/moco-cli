@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/k1tesurfen/moco-cli/internal/api"
 	"github.com/k1tesurfen/moco-cli/internal/service"
 	"github.com/k1tesurfen/moco-cli/internal/timeutil"
 	"github.com/k1tesurfen/moco-cli/internal/wizard"
@@ -19,8 +20,15 @@ import (
 // one fuzzy list of project / task pairs (recent and aliases first), then duration and
 // description. It never leaves the TUI.
 type activityForm struct {
-	title string
-	timer bool // timer start: pair + optional description, no duration
+	title    string
+	timer    bool // timer start: pair + optional description, no duration
+	joinOnly bool // only the projects the user can join, no task / duration / description
+
+	// Projects the user is not on are listed (tag "+") once a filter is typed; enter on one
+	// calls onJoin, and joined (from the model) turns it into the project's tasks.
+	onJoin      func(p api.Project) tea.Cmd
+	joinPending bool   // the joinable projects are still loading
+	joining     string // name of the project being joined
 
 	options []pairOption
 	matches []int // indexes into options for the current filter
@@ -43,9 +51,10 @@ type activityForm struct {
 }
 
 type pairOption struct {
-	tag    string // "↺" recent, "@alias"
+	tag    string // "↺" recent, "@alias", "+" join
 	pick   service.Pick
 	search string
+	join   bool // a project the user is not on; pick has no task
 }
 
 const (
@@ -114,6 +123,94 @@ func newActivityForm(title string, env wizard.Env) *activityForm {
 	return f
 }
 
+// newJoinForm is the popup for joining a project: only the joinable projects, enter joins.
+func newJoinForm() *activityForm {
+	f := &activityForm{
+		title:       "Join a project",
+		joinOnly:    true,
+		joinPending: true,
+		filter:      newInput("", "type to search all company projects: name, customer or identifier"),
+	}
+	f.applyFilter()
+	f.setFocus(fPair)
+	return f
+}
+
+func projectSearch(p api.Project) string {
+	return strings.ToLower(strings.Join([]string{p.Name, p.Customer.Name, p.Identifier}, " "))
+}
+
+// setJoinable replaces the join options with ps (the projects the user is not on).
+func (f *activityForm) setJoinable(ps []api.Project) {
+	cur := f.selected()
+	f.joinPending = false
+	opts := f.options[:0:0]
+	for _, o := range f.options {
+		if !o.join {
+			opts = append(opts, o)
+		}
+	}
+	for _, p := range ps {
+		opts = append(opts, pairOption{tag: "+", pick: service.Pick{Project: p}, search: projectSearch(p), join: true})
+	}
+	f.options = opts
+	f.applyFilter()
+	f.reselect(cur)
+}
+
+// joined replaces the join option of p by its tasks and selects the first of them.
+func (f *activityForm) joined(p api.Project) {
+	f.joining = ""
+	var opts, tasks []pairOption
+	for _, o := range f.options {
+		if !(o.join && o.pick.Project.ID == p.ID) {
+			opts = append(opts, o)
+		}
+	}
+	for _, t := range service.ActiveTasks(p) {
+		pick := service.Pick{Project: p, Task: t}
+		tasks = append(tasks, pairOption{pick: pick, search: projectSearch(p) + " " + strings.ToLower(t.Name)})
+	}
+	i := len(opts)
+	for j, o := range opts {
+		if o.join {
+			i = j
+			break
+		}
+	}
+	f.options = append(opts[:i:i], append(tasks, opts[i:]...)...)
+	f.applyFilter()
+	for j, idx := range f.matches {
+		if f.options[idx].pick.Project.ID == p.ID {
+			f.sel = j
+			break
+		}
+	}
+	if len(tasks) == 0 {
+		f.err = p.Name + " has no active tasks to book on."
+	}
+}
+
+// selected is the highlighted option, nil if nothing matches.
+func (f *activityForm) selected() *pairOption {
+	if f.sel < len(f.matches) {
+		return &f.options[f.matches[f.sel]]
+	}
+	return nil
+}
+
+// reselect moves the cursor back onto o (after the option list changed).
+func (f *activityForm) reselect(o *pairOption) {
+	if o == nil {
+		return
+	}
+	for j, idx := range f.matches {
+		if q := f.options[idx]; q.join == o.join && q.pick.Project.ID == o.pick.Project.ID && q.pick.Task.ID == o.pick.Task.ID {
+			f.sel = j
+		}
+	}
+}
+
 // preselect sets the current pair (edit mode) and moves the list cursor onto it.
 func (f *activityForm) preselect(p service.Pick) {
 	f.chosen = &p
@@ -128,6 +225,9 @@ func (f *activityForm) applyFilter() {
 	words := strings.Fields(strings.ToLower(f.filter.Value()))
 	f.matches = f.matches[:0]
 	for i, o := range f.options {
+		if o.join && len(words) == 0 && !f.joinOnly {
+			continue // projects to join only show up when searching
+		}
 		if containsAll(o.search, words) {
 			f.matches = append(f.matches, i)
 		}
@@ -145,6 +245,9 @@ func containsAll(hay string, words []string) bool {
 }
 
 func (f *activityForm) fields() []int {
+	if f.joinOnly {
+		return []int{fPair}
+	}
 	if f.timer {
 		return []int{fPair, fDescription}
 	}
@@ -219,6 +322,13 @@ func (f *activityForm) update(msg tea.KeyMsg) (cmd tea.Cmd, done bool) {
 			f.sel = clamp(f.sel+1, 0, len(f.matches)-1)
 			return nil, false
 		case "enter":
+			if o := f.selected(); o != nil && o.join {
+				if f.joining == "" && f.onJoin != nil {
+					f.joining, f.err = o.pick.Project.Name, ""
+					return f.onJoin(o.pick.Project), false
+				}
+				return nil, false
+			}
 			if !f.pickSelected() {
 				f.err = "no project / task matches the filter"
 				return nil, false
@@ -255,7 +365,7 @@ func (f *activityForm) update(msg tea.KeyMsg) (cmd tea.Cmd, done bool) {
 
 // pickSelected takes the highlighted pair as the choice.
 func (f *activityForm) pickSelected() bool {
-	if f.focus != fPair || len(f.matches) == 0 {
+	if o := f.selected(); f.focus != fPair || o == nil || o.join {
 		return f.chosen != nil
 	}
 	p := f.options[f.matches[f.sel]].pick
@@ -301,14 +411,22 @@ func (f *activityForm) lines(w int) []string {
 		return l
 	}
 
-	chosen := sMuted.Render("none yet")
-	if f.chosen != nil {
-		chosen = sProject.Render(f.chosen.Project.Name + " / " + f.chosen.Task.Name)
+	if f.joinOnly {
+		out = append(out, label(fPair, "Project", "projects you are not on yet · enter adds you to the team"))
+	} else {
+		chosen := sMuted.Render("none yet")
+		if f.chosen != nil {
+			chosen = sProject.Render(f.chosen.Project.Name + " / " + f.chosen.Task.Name)
+		}
+		out = append(out, label(fPair, "Project / task", "")+"  "+chosen)
 	}
-	out = append(out, label(fPair, "Project / task", "")+"  "+chosen)
 	if f.focus == fPair {
 		out = append(out, f.filter.View())
-		if len(f.matches) == 0 {
+		searching := f.joinPending && (f.joinOnly || strings.TrimSpace(f.filter.Value()) != "")
+		switch {
+		case len(f.matches) == 0 && searching:
+			out = append(out, sMuted.Render("  searching all company projects…"))
+		case len(f.matches) == 0:
 			out = append(out, sMuted.Render("  no match"))
 		}
 		if f.sel < f.offset {
@@ -323,16 +441,38 @@ func (f *activityForm) lines(w int) []string {
 			if o.tag != "" {
 				tag = sKey.Render(o.tag) + " "
 			}
-			row := " " + tag + sProject.Render(pairLabel(o.pick.Project.Name, o.pick.Task.Name, w-4-len([]rune(o.tag)))) +
-				sMuted.Render(" · "+o.pick.Project.Customer.Name)
+			var row string
+			if o.join {
+				row = " " + tag + sProject.Render(clip(o.pick.Project.Name, w-4)) +
+					sMuted.Render(" · "+o.pick.Project.Customer.Name+" · join")
+			} else {
+				row = " " + tag + sProject.Render(pairLabel(o.pick.Project.Name, o.pick.Task.Name, w-4-len([]rune(o.tag)))) +
+					sMuted.Render(" · "+o.pick.Project.Customer.Name)
+			}
 			if i == f.sel {
 				row = highlight(row, w, true)
 			}
 			out = append(out, row)
 		}
 		if n := len(f.matches); n > formListRows {
-			out = append(out, sMuted.Render(fmt.Sprintf("  %d of %d · ↑↓ select · enter take", f.sel+1, n)))
+			verb := "take"
+			if f.joinOnly {
+				verb = "join"
+			}
+			out = append(out, sMuted.Render(fmt.Sprintf("  %d of %d · ↑↓ select · enter %s", f.sel+1, n, verb)))
 		}
+		switch o := f.selected(); {
+		case f.joining != "":
+			out = append(out, sWarn.Render("  Joining "+f.joining+"…"))
+		case o != nil && o.join:
+			out = append(out, sMuted.Render("  + you are not on this project · enter adds you to its team in MOCO"))
+		}
+	}
+	if f.joinOnly {
+		if f.err != "" {
+			out = append(out, "", sErr.Render(f.err))
+		}
+		return out
 	}
 
 	if !f.timer {

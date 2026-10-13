@@ -61,6 +61,9 @@ type model struct {
 	offsets    [panelCount]int
 	projects   projectsState
 
+	joinable        []api.Project // projects the user could join; nil until loaded
+	joinableLoading bool
+
 	timer           *api.Activity
 	pending, failed int
 	offline         bool
@@ -235,6 +238,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case hoursMsg:
 		m.hoursLoaded(msg)
+		return m, nil
+
+	case joinableMsg:
+		m.joinableLoaded(msg)
+		return m, nil
+
+	case joinedMsg:
+		m.joinedDone(msg)
 		return m, nil
 
 	case timerMsg:
@@ -469,7 +480,11 @@ func (m *model) View() string {
 		popup(m.prompt.title, "enter save · tab next · esc cancel", pl, m.popupWidth(), len(pl)+2)
 	case m.form != nil:
 		fl := m.form.lines(m.formWidth() - 4)
-		popup(m.form.title, "tab next field · enter take / save · esc cancel", fl, m.formWidth(), min(height, len(fl)+2))
+		foot := "tab next field · enter take / save · esc cancel"
+		if m.form.joinOnly {
+			foot = "↑↓ select · enter join · esc cancel"
+		}
+		popup(m.form.title, foot, fl, m.formWidth(), min(height, len(fl)+2))
 	case m.confirm != nil:
 		cl := m.confirm.lines(m.popupWidth() - 4)
 		popup(m.confirm.question, "y yes · n no", cl, m.popupWidth(), len(cl)+2)
@@ -525,7 +540,7 @@ func (m *model) hints() string {
 	case m.focus == pProjects && m.projects.filtering:
 		return keys("type", "filter", "enter", "keep", "esc", "clear")
 	case m.focus == pProjects:
-		return keys("↑↓", "project", "p/P", "period", "/", "filter", "tab", "panel", "?", "help", "q", "quit")
+		return keys("↑↓", "project", "p/P", "period", "/", "filter", "+", "join", "-", "leave", "tab", "panel", "?", "help", "q", "quit")
 	case m.focus == pPresence:
 		return keys("←→", "day", "↑↓", "select", "p", "presence", "e", "edit", "n", "new", "s", "stop", "b", "break", "m", "merge", "o", "home/office", "d", "delete", "?", "help")
 	case m.focus == pWeek:
@@ -548,6 +563,7 @@ func helpLines() []string {
 		{"t", "today"},
 		{"Entries", ""},
 		{"a", "log an activity (empty duration = the day's unlogged time)"},
+		{"", "typing in the popup also finds projects you're not on (+): enter joins"},
 		{"e · enter", "edit the selected activity or presence"},
 		{"d · x", "delete the selected activity or presence"},
 		{"p", "presence: set the end of the open one, or add the next block"},
@@ -557,6 +573,8 @@ func helpLines() []string {
 		{"Projects", ""},
 		{"p P", "next / previous period"},
 		{"/ · esc", "filter · clear filter"},
+		{"+", "join a project: add yourself to its team in MOCO"},
+		{"-", "leave the selected project (only without booked hours)"},
 	}
 	var lines []string
 	for _, r := range rows {

@@ -148,6 +148,10 @@ func (m *model) projectsKey(msg tea.KeyMsg) tea.Cmd {
 		return m.ensureHours(true)
 	case "/":
 		s.filtering = true
+	case "+":
+		return m.joinProject()
+	case "-":
+		m.leaveProject()
 	case "esc":
 		s.filter, s.cursor = "", 0
 	case "up", "k":

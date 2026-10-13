@@ -74,12 +74,17 @@ func containsAll(hay string, words []string) bool {
 
 // ResolveProject finds exactly one project for query.
 func ResolveProject(projects []api.Project, query string) (api.Project, error) {
+	return resolveProject(projects, query, fmt.Errorf("no assigned project matches %q (try `moco projects --refresh`)", query))
+}
+
+// resolveProject finds exactly one project for query; none is the error when nothing matches.
+func resolveProject(projects []api.Project, query string, none error) (api.Project, error) {
 	found := FindProjects(projects, query)
 	switch len(found) {
 	case 1:
 		return found[0], nil
 	case 0:
-		return api.Project{}, fmt.Errorf("no assigned project matches %q (try `moco projects --refresh`)", query)
+		return api.Project{}, none
 	}
 	var names []string
 	for i, p := range found {

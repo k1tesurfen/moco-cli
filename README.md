@@ -59,6 +59,9 @@ moco log --gap -d yesterday                     # the unlogged time of a day
 moco list --week          # moco edit <id> · moco delete <id>
 
 moco timer start dev      # timer on today's activity; moco timer stop asks the description
+
+moco projects join acme        # add yourself to a project's team, so you can book on it
+moco projects leave acme       # remove yourself again (MOCO allows it only without booked hours)
 ```
 
 Durations: `1h30`, `90m`, `1:30`, `1.5` – always **rounded up** to 5 minutes (configurable).
@@ -77,11 +80,12 @@ moco alias list           # moco alias rm dev
 |---|---|
 | `1` `2` `3` `4` · `tab` | week · presence · activities · projects |
 | `←` `→` · `h` `l` | previous / next day — `H` `L` previous / next week — `t` today |
-| `a` · `e` · `d` | log · edit · delete an activity (popup form, fuzzy project/task list) |
+| `a` · `e` · `d` | log · edit · delete an activity (popup form, fuzzy project/task list; typing also finds projects you're not on, marked `+` — enter joins them) |
 | `p` | presence: set the end of the open one, or add the next block — plan the whole day ahead |
 | `n` `s` `b` `m` `o` | presence: new · stop · break · merge with next · toggle home office |
 | `T` | start / stop a timer |
 | `p` `P` · `/` | projects: period · filter |
+| `+` · `-` | projects: join a project (add yourself to its team) · leave the selected one |
 | `r` · `?` · `q` | reload · help · quit |
 
 Data is loaded a week at a time and cached; skipping through days doesn't hit the API.
